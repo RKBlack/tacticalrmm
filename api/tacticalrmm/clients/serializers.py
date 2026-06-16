@@ -1,6 +1,7 @@
+from drf_spectacular.utils import extend_schema_field
+from rest_framework import serializers
 from rest_framework.serializers import (
     ModelSerializer,
-    ReadOnlyField,
     SerializerMethodField,
     ValidationError,
 )
@@ -28,10 +29,10 @@ class SiteCustomFieldSerializer(ModelSerializer):
 
 
 class SiteSerializer(ModelSerializer):
-    client_name = ReadOnlyField(source="client.name")
+    client_name = serializers.CharField(source="client.name", read_only=True)
     custom_fields = SiteCustomFieldSerializer(many=True, read_only=True)
-    maintenance_mode = ReadOnlyField()
-    agent_count = ReadOnlyField()
+    maintenance_mode = serializers.BooleanField(read_only=True)
+    agent_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Site
@@ -58,7 +59,7 @@ class SiteSerializer(ModelSerializer):
 
 
 class SiteMinimumSerializer(ModelSerializer):
-    client_name = ReadOnlyField(source="client.name")
+    client_name = serializers.CharField(source="client.name", read_only=True)
 
     class Meta:
         model = Site
@@ -93,9 +94,10 @@ class ClientCustomFieldSerializer(ModelSerializer):
 class ClientSerializer(ModelSerializer):
     sites = SerializerMethodField()
     custom_fields = ClientCustomFieldSerializer(many=True, read_only=True)
-    maintenance_mode = ReadOnlyField()
-    agent_count = ReadOnlyField()
+    maintenance_mode = serializers.BooleanField(read_only=True)
+    agent_count = serializers.IntegerField(read_only=True)
 
+    @extend_schema_field(SiteSerializer(many=True))
     def get_sites(self, obj):
         return SiteSerializer(
             obj.filtered_sites,
@@ -126,10 +128,10 @@ class ClientSerializer(ModelSerializer):
 
 
 class DeploymentSerializer(ModelSerializer):
-    client_id = ReadOnlyField(source="client.id")
-    site_id = ReadOnlyField(source="site.id")
-    client_name = ReadOnlyField(source="client.name")
-    site_name = ReadOnlyField(source="site.name")
+    client_id = serializers.IntegerField(source="client.id", read_only=True)
+    site_id = serializers.IntegerField(source="site.id", read_only=True)
+    client_name = serializers.CharField(source="client.name", read_only=True)
+    site_name = serializers.CharField(source="site.name", read_only=True)
 
     class Meta:
         model = Deployment

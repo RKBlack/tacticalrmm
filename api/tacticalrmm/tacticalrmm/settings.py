@@ -202,9 +202,84 @@ REST_FRAMEWORK = {
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Tactical RMM API",
-    "DESCRIPTION": "Simple and Fast remote monitoring and management tool",
+    "DESCRIPTION": (
+        "REST API for Tactical RMM — a fast remote monitoring and management tool.\n\n"
+        "## Authentication\n"
+        "Most endpoints require an API key. Generate one in the web UI under "
+        "**Settings → Global Settings → API Keys**, then send it on every request "
+        "via the `X-API-KEY` header.\n\n"
+        "Session/token (Knox) authentication is also accepted for browser-based access.\n\n"
+        "## Conventions\n"
+        "- Request and response bodies are JSON unless noted otherwise.\n"
+        "- Many write endpoints accept nested objects; see each operation's request schema.\n"
+        "- Endpoints under `apiv3`/`apiv4` are used by agents and are not intended for "
+        "general integration use."
+    ),
     "VERSION": TRMM_VERSION,
     "AUTHENTICATION_WHITELIST": ["tacticalrmm.auth.APIAuthentication"],
+    "SERVE_INCLUDE_SCHEMA": False,
+    "CONTACT": {
+        "name": "Tactical RMM",
+        "url": "https://docs.tacticalrmm.com",
+    },
+    "LICENSE": {
+        "name": "Tactical RMM License",
+        "url": "https://license.tacticalrmm.com",
+    },
+    # split request/response component schemas so write-only / read-only
+    # fields render correctly per direction
+    "COMPONENT_SPLIT_REQUEST": True,
+    # cleaner UI: keep tags & operations alphabetised and collapsed by default
+    "SORT_OPERATIONS": True,
+    "SWAGGER_UI_SETTINGS": {
+        "deepLinking": True,
+        "persistAuthorization": True,
+        "displayOperationId": False,
+        "docExpansion": "none",
+        "filter": True,
+        "tagsSorter": "alpha",
+        "operationsSorter": "alpha",
+    },
+    # give shared choice sets stable, readable component names so the same
+    # enum isn't emitted under several auto-generated names (e.g. Status25cEnum)
+    "ENUM_NAME_OVERRIDES": {
+        "AlertSeverityEnum": "tacticalrmm.constants.AlertSeverity",
+        "AgentMonTypeEnum": "tacticalrmm.constants.AgentMonType",
+        "AgentPlatEnum": "tacticalrmm.constants.AgentPlat",
+        "DebugLogLevelEnum": "tacticalrmm.constants.DebugLogLevel",
+        "AlertTemplateActionTypeEnum": "tacticalrmm.constants.AlertTemplateActionType",
+        "URLActionTypeEnum": "tacticalrmm.constants.URLActionType",
+        # CheckStatus and TaskStatus share identical values (passing/failing/
+        # pending) so they collapse to one enum component
+        "CheckTaskStatusEnum": "tacticalrmm.constants.CheckStatus",
+        "TaskRunStatusEnum": "tacticalrmm.constants.TaskRunStatus",
+        "PendingActionStatusEnum": "tacticalrmm.constants.PAStatus",
+        "PendingActionTypeEnum": "tacticalrmm.constants.PAAction",
+        "ScriptShellEnum": "tacticalrmm.constants.ScriptShell",
+        "WindowsTerminalShellEnum": "tacticalrmm.constants.WindowsTerminalShellChoices",
+        # Linux and Darwin terminal shells share identical values (bash/custom)
+        "UnixTerminalShellEnum": "tacticalrmm.constants.LinuxTerminalShellChoices",
+        "AgentTerminalShellEnum": "tacticalrmm.constants.AgentTerminalShellChoices",
+        "WinUpdateAutoApprovalEnum": "winupdate.models.AUTO_APPROVAL_CHOICES",
+        "TimeZoneEnum": "core.models.TZ_CHOICES",
+    },
+    "TAGS": [
+        {"name": "accounts", "description": "Users, roles, permissions, API keys, 2FA."},
+        {"name": "agents", "description": "Managed endpoints — info, actions, scripts, notes, history."},
+        {"name": "alerts", "description": "Alerts and alert templates."},
+        {"name": "automation", "description": "Automation policies and their assignments."},
+        {"name": "autotasks", "description": "Scheduled/automated tasks run on agents."},
+        {"name": "checks", "description": "Monitoring checks and their results."},
+        {"name": "clients", "description": "Clients, sites, and agent deployments."},
+        {"name": "core", "description": "Global settings, custom fields, dashboard, server config."},
+        {"name": "logs", "description": "Audit logs, pending actions, and debug logs."},
+        {"name": "scripts", "description": "Script library and script snippets."},
+        {"name": "services", "description": "Windows services management on agents."},
+        {"name": "software", "description": "Installed software inventory and Chocolatey installs."},
+        {"name": "winupdate", "description": "Windows Update management."},
+        {"name": "apiv3", "description": "Internal agent callback endpoints (not for general use)."},
+        {"name": "apiv4", "description": "Internal agent callback endpoints (not for general use)."},
+    ],
 }
 
 

@@ -1,4 +1,4 @@
-from rest_framework.serializers import ModelSerializer, ReadOnlyField
+from rest_framework.serializers import CharField, ModelSerializer, ReadOnlyField
 
 from .models import Script, ScriptSnippet
 
@@ -52,8 +52,8 @@ class ScriptSerializer(ModelSerializer):
 
 
 class ScriptCheckSerializer(ModelSerializer):
-    code = ReadOnlyField()
-    script_hash = ReadOnlyField()
+    code = CharField(read_only=True)
+    script_hash = CharField(read_only=True)
 
     class Meta:
         model = Script

@@ -4,6 +4,14 @@ from datetime import datetime as dt
 from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone as djangotime
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    inline_serializer,
+)
+from rest_framework import serializers
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
@@ -27,6 +35,24 @@ from .serializers import CheckHistorySerializer, CheckSerializer
 class GetAddChecks(APIView):
     permission_classes = [IsAuthenticated, ChecksPerms]
 
+    @extend_schema(
+        tags=["checks"],
+        summary="List checks",
+        description="Returns checks the authenticated user is allowed to view. When an "
+        "agent_id or policy id is supplied via the URL, returns the checks for that agent "
+        "(including policy-inherited checks) or policy respectively.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+                required=False, description="Agent id to list checks for."
+            ),
+            OpenApiParameter(
+                "policy", OpenApiTypes.INT, OpenApiParameter.PATH,
+                required=False, description="Policy id to list checks for."
+            ),
+        ],
+        responses=CheckSerializer(many=True),
+    )
     def get(self, request, agent_id=None, policy=None):
         if agent_id:
             agent = get_object_or_404(Agent, agent_id=agent_id)
@@ -38,6 +64,14 @@ class GetAddChecks(APIView):
             checks = Check.objects.filter_by_role(request.user)  # type: ignore
         return Response(CheckSerializer(checks, many=True).data)
 
+    @extend_schema(
+        tags=["checks"],
+        summary="Add a check",
+        description="Creates a check on an agent or policy. Pass `agent` as an agent id "
+        "(resolved to the agent's pk server-side) to attach the check to an agent.",
+        request=CheckSerializer,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def post(self, request):
         data = request.data.copy()
         # Determine if adding check to Agent and replace agent_id with pk
@@ -60,9 +94,17 @@ class GetAddChecks(APIView):
         return Response(f"{new_check.readable_desc} was added!")
 
 
+@extend_schema(tags=["checks"], parameters=[
+    OpenApiParameter("pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+                     description="Check primary key.")
+])
 class GetUpdateDeleteCheck(APIView):
     permission_classes = [IsAuthenticated, ChecksPerms]
 
+    @extend_schema(
+        summary="Get a single check",
+        responses=CheckSerializer,
+    )
     def get(self, request, pk):
         check = get_object_or_404(Check, pk=pk)
         if check.agent and not _has_perm_on_agent(request.user, check.agent.agent_id):
@@ -70,6 +112,12 @@ class GetUpdateDeleteCheck(APIView):
 
         return Response(CheckSerializer(check).data)
 
+    @extend_schema(
+        summary="Update a check",
+        description="Edits a check. Non-editable fields are ignored if supplied.",
+        request=CheckSerializer,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def put(self, request, pk):
         check = get_object_or_404(Check, pk=pk)
 
@@ -98,6 +146,10 @@ class GetUpdateDeleteCheck(APIView):
 
         return Response(f"{check.readable_desc} was edited!")
 
+    @extend_schema(
+        summary="Delete a check",
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def delete(self, request, pk):
         check = get_object_or_404(Check, pk=pk)
 
@@ -112,6 +164,18 @@ class GetUpdateDeleteCheck(APIView):
 class ResetCheck(APIView):
     permission_classes = [IsAuthenticated, ChecksPerms]
 
+    @extend_schema(
+        tags=["checks"],
+        summary="Reset a check result status",
+        description="Resets the status of a single check result to passing and resolves "
+        "any open alert for it.",
+        parameters=[
+            OpenApiParameter("pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+                             description="CheckResult primary key.")
+        ],
+        request=None,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def post(self, request, pk):
         result = get_object_or_404(CheckResult, pk=pk)
 
@@ -133,6 +197,18 @@ class ResetCheck(APIView):
 class ResetAllChecksStatus(APIView):
     permission_classes = [IsAuthenticated, ChecksPerms]
 
+    @extend_schema(
+        tags=["checks"],
+        summary="Reset all check statuses for an agent",
+        description="Resets every check result for the given agent to passing and "
+        "resolves any open alerts.",
+        parameters=[
+            OpenApiParameter("agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+                             description="Agent id.")
+        ],
+        request=None,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def post(self, request, agent_id):
         agent = get_object_or_404(
             Agent.objects.defer(*AGENT_DEFER)
@@ -173,6 +249,26 @@ class ResetAllChecksStatus(APIView):
 class GetCheckHistory(APIView):
     permission_classes = [IsAuthenticated, ChecksPerms]
 
+    @extend_schema(
+        tags=["checks"],
+        summary="Get check history",
+        description="Returns historical check result data points for a check result, "
+        "optionally restricted to the last N days via `timeFilter` (0 = all history).",
+        parameters=[
+            OpenApiParameter("pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+                             description="CheckResult primary key.")
+        ],
+        request=inline_serializer(
+            name="ChecksGetCheckHistoryRequest",
+            fields={
+                "timeFilter": serializers.IntegerField(
+                    required=False,
+                    help_text="Number of days of history to return; 0 returns all.",
+                ),
+            },
+        ),
+        responses=CheckHistorySerializer(many=True),
+    )
     def patch(self, request, pk):
         result = get_object_or_404(CheckResult, pk=pk)
 
@@ -200,6 +296,17 @@ class GetCheckHistory(APIView):
         return Response(CheckHistorySerializer(check_history, many=True).data)
 
 
+@extend_schema(
+    tags=["checks"],
+    summary="Run checks on an agent",
+    description="Triggers all checks to run immediately on the specified agent via NATS.",
+    parameters=[
+        OpenApiParameter("agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+                         description="Agent id.")
+    ],
+    request=None,
+    responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, RunChecksPerms])
 def run_checks(request, agent_id):
@@ -214,6 +321,23 @@ def run_checks(request, agent_id):
     return notify_error("Unable to contact the agent")
 
 
+@extend_schema(
+    tags=["checks"],
+    summary="Bulk run checks for a client or site",
+    description="Triggers all checks to run on every agent under the given client or "
+    "site via NATS.",
+    parameters=[
+        OpenApiParameter(
+            "target", OpenApiTypes.STR, OpenApiParameter.PATH,
+            enum=["client", "site"],
+            description="Whether `pk` refers to a client or a site.",
+        ),
+        OpenApiParameter("pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+                         description="Client or site primary key."),
+    ],
+    request=None,
+    responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, BulkRunChecksPerms])
 def bulk_run_checks(request, target, pk):

@@ -7,7 +7,16 @@ from django.conf import settings
 from django.db.models import Count, Exists, OuterRef, Prefetch, prefetch_related_objects
 from django.shortcuts import get_object_or_404
 from django.utils import timezone as djangotime
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    inline_serializer,
+)
 from knox.models import AuthToken
+from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -32,6 +41,13 @@ from .serializers import (
 class GetAddClients(APIView):
     permission_classes = [IsAuthenticated, ClientsPerms]
 
+    @extend_schema(
+        tags=["clients"],
+        summary="List all clients",
+        description="Returns every client the authenticated user is allowed to view, "
+        "each with its nested sites, custom fields, agent count and maintenance state.",
+        responses=ClientSerializer(many=True),
+    )
     def get(self, request):
         clients = (
             Client.objects.order_by("name")
@@ -70,6 +86,40 @@ class GetAddClients(APIView):
         )
         return Response(ClientSerializer(clients, many=True).data)
 
+    @extend_schema(
+        tags=["clients"],
+        summary="Add a client (and its first site)",
+        description="Creates a client together with an initial site. Optionally seeds "
+        "custom field values and, during initial setup, the default timezone and "
+        "MeshCentral company name.",
+        request=inline_serializer(
+            name="AddClientRequest",
+            fields={
+                "client": ClientSerializer(),
+                "site": inline_serializer(
+                    name="AddClientSite",
+                    fields={"name": serializers.CharField()},
+                ),
+                "custom_fields": ClientCustomFieldSerializer(
+                    many=True, required=False
+                ),
+                "initialsetup": serializers.BooleanField(required=False),
+                "timezone": serializers.CharField(required=False),
+                "companyname": serializers.CharField(required=False),
+            },
+        ),
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+        examples=[
+            OpenApiExample(
+                "Create client with one site",
+                value={
+                    "client": {"name": "Acme Corp"},
+                    "site": {"name": "Main Office"},
+                },
+                request_only=True,
+            )
+        ],
+    )
     def post(self, request):
         # create client
         client_serializer = ClientSerializer(data=request.data["client"])
@@ -112,9 +162,17 @@ class GetAddClients(APIView):
         return Response(f"{client.name} was added")
 
 
+@extend_schema(tags=["clients"], parameters=[
+    OpenApiParameter("id", OpenApiTypes.INT, OpenApiParameter.PATH,
+                     description="Client primary key.")
+])
 class GetUpdateDeleteClient(APIView):
     permission_classes = [IsAuthenticated, ClientsPerms]
 
+    @extend_schema(
+        summary="Get a single client",
+        responses=ClientSerializer,
+    )
     def get(self, request, pk):
         client = get_object_or_404(Client, pk=pk)
 
@@ -137,6 +195,17 @@ class GetUpdateDeleteClient(APIView):
         )
         return Response(ClientSerializer(client).data)
 
+    @extend_schema(
+        summary="Update a client",
+        request=inline_serializer(
+            name="UpdateClientRequest",
+            fields={
+                "client": ClientSerializer(),
+                "custom_fields": ClientCustomFieldSerializer(many=True, required=False),
+            },
+        ),
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def put(self, request, pk):
         client = get_object_or_404(Client, pk=pk)
 
@@ -168,6 +237,19 @@ class GetUpdateDeleteClient(APIView):
 
         return Response("{client} was updated")
 
+    @extend_schema(
+        summary="Delete a client",
+        description="Deletes a client. If agents still exist under the client, "
+        "`move_to_site` must be supplied to relocate them first.",
+        parameters=[
+            OpenApiParameter(
+                "move_to_site", OpenApiTypes.INT, OpenApiParameter.QUERY,
+                required=False,
+                description="Site id to move any existing agents to before deletion.",
+            )
+        ],
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def delete(self, request, pk):
         client = get_object_or_404(Client, pk=pk)
         agent_count = client.live_agent_count
@@ -193,10 +275,27 @@ class GetUpdateDeleteClient(APIView):
 class GetAddSites(APIView):
     permission_classes = [IsAuthenticated, SitesPerms]
 
+    @extend_schema(
+        tags=["clients"],
+        summary="List all sites",
+        responses=SiteSerializer(many=True),
+    )
     def get(self, request):
         sites = Site.objects.filter_by_role(request.user)  # type: ignore
         return Response(SiteSerializer(sites, many=True).data)
 
+    @extend_schema(
+        tags=["clients"],
+        summary="Add a site",
+        request=inline_serializer(
+            name="AddSiteRequest",
+            fields={
+                "site": SiteSerializer(),
+                "custom_fields": SiteCustomFieldSerializer(many=True, required=False),
+            },
+        ),
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def post(self, request):
         if not _has_perm_on_client(request.user, request.data["site"]["client"]):
             raise PermissionDenied()
@@ -222,13 +321,29 @@ class GetAddSites(APIView):
         return Response(f"Site {site.name} was added!")
 
 
+@extend_schema(tags=["clients"], parameters=[
+    OpenApiParameter("id", OpenApiTypes.INT, OpenApiParameter.PATH,
+                     description="Site primary key.")
+])
 class GetUpdateDeleteSite(APIView):
     permission_classes = [IsAuthenticated, SitesPerms]
 
+    @extend_schema(summary="Get a single site", responses=SiteSerializer)
     def get(self, request, pk):
         site = get_object_or_404(Site, pk=pk)
         return Response(SiteSerializer(site).data)
 
+    @extend_schema(
+        summary="Update a site",
+        request=inline_serializer(
+            name="UpdateSiteRequest",
+            fields={
+                "site": SiteSerializer(),
+                "custom_fields": SiteCustomFieldSerializer(many=True, required=False),
+            },
+        ),
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def put(self, request, pk):
         site = get_object_or_404(Site, pk=pk)
 
@@ -264,6 +379,19 @@ class GetUpdateDeleteSite(APIView):
 
         return Response("Site was edited")
 
+    @extend_schema(
+        summary="Delete a site",
+        description="Deletes a site. If agents still exist under the site, "
+        "`move_to_site` must be supplied to relocate them first.",
+        parameters=[
+            OpenApiParameter(
+                "move_to_site", OpenApiTypes.INT, OpenApiParameter.QUERY,
+                required=False,
+                description="Site id to move any existing agents to before deletion.",
+            )
+        ],
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def delete(self, request, pk):
         site = get_object_or_404(Site, pk=pk)
         if site.client.sites.count() == 1:
@@ -291,10 +419,36 @@ class GetUpdateDeleteSite(APIView):
 class AgentDeployment(APIView):
     permission_classes = [IsAuthenticated, DeploymentPerms]
 
+    @extend_schema(
+        tags=["clients"],
+        summary="List agent deployments",
+        responses=DeploymentSerializer(many=True),
+    )
     def get(self, request):
         deps = Deployment.objects.filter_by_role(request.user)  # type: ignore
         return Response(DeploymentSerializer(deps, many=True).data)
 
+    @extend_schema(
+        tags=["clients"],
+        summary="Create an agent deployment",
+        description="Creates a deployment link/token used to generate agent installers "
+        "for a given site.",
+        request=inline_serializer(
+            name="AddDeploymentRequest",
+            fields={
+                "site": serializers.IntegerField(help_text="Site id."),
+                "expires": serializers.DateTimeField(
+                    help_text="Expiry timestamp, format %Y-%m-%dT%H:%M:%S%z."
+                ),
+                "agenttype": serializers.ChoiceField(choices=["server", "workstation"]),
+                "goarch": serializers.CharField(help_text="Target architecture, e.g. amd64."),
+                "power": serializers.BooleanField(),
+                "ping": serializers.BooleanField(),
+                "rdp": serializers.BooleanField(),
+            },
+        ),
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def post(self, request):
         if getattr(settings, "TRMM_INSECURE", False):
             return notify_error("Not available in insecure mode")
@@ -337,6 +491,15 @@ class AgentDeployment(APIView):
         ).save()
         return Response("The deployment was added successfully")
 
+    @extend_schema(
+        tags=["clients"],
+        summary="Delete an agent deployment",
+        parameters=[
+            OpenApiParameter("id", OpenApiTypes.INT, OpenApiParameter.PATH,
+                             description="Deployment primary key.")
+        ],
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def delete(self, request, pk):
         d = get_object_or_404(Deployment, pk=pk)
 
@@ -353,6 +516,21 @@ class AgentDeployment(APIView):
 class GenerateAgent(APIView):
     permission_classes = (AllowAny,)
 
+    @extend_schema(
+        tags=["clients"],
+        summary="Download an agent installer",
+        description="Public endpoint. Given a deployment UID, streams a generated "
+        "Windows agent installer (.exe) for that deployment.",
+        parameters=[
+            OpenApiParameter("uid", OpenApiTypes.UUID, OpenApiParameter.PATH,
+                             description="Deployment UID.")
+        ],
+        request=None,
+        responses={
+            (200, "application/octet-stream"): OpenApiTypes.BINARY,
+            404: OpenApiResponse(description="Invalid or unknown deployment UID"),
+        },
+    )
     def get(self, request, uid):
         if getattr(settings, "TRMM_INSECURE", False):
             return notify_error("Not available in insecure mode")

@@ -1,6 +1,8 @@
 from datetime import datetime
 
 from django.utils import timezone as djangotime
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from django.conf import settings
 
@@ -18,13 +20,16 @@ class TaskResultSerializer(serializers.ModelSerializer):
 
 
 class TaskSerializer(serializers.ModelSerializer):
-    check_name = serializers.ReadOnlyField(source="assigned_check.readable_desc")
+    check_name = serializers.CharField(
+        source="assigned_check.readable_desc", read_only=True
+    )
     schedule = serializers.ReadOnlyField()
     alert_template = serializers.SerializerMethodField()
     run_time_date = serializers.DateTimeField(required=False)
     expire_date = serializers.DateTimeField(allow_null=True, required=False)
     task_result = serializers.SerializerMethodField()
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_task_result(self, obj):
         return (
             TaskResultSerializer(obj.task_result).data
@@ -186,6 +191,7 @@ class TaskSerializer(serializers.ModelSerializer):
 
         return data
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_alert_template(self, obj):
         if obj.agent:
             alert_template = obj.agent.alert_template
@@ -209,6 +215,7 @@ class TaskSerializer(serializers.ModelSerializer):
 class TaskGOGetSerializer(serializers.ModelSerializer):
     task_actions = serializers.SerializerMethodField()
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_task_actions(self, obj):
         tmp = []
         actions_to_remove = []

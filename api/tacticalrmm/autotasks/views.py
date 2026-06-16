@@ -1,5 +1,14 @@
 from django.shortcuts import get_object_or_404
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    inline_serializer,
+)
 from packaging import version as pyver
+from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -20,6 +29,25 @@ from .tasks import remove_orphaned_win_tasks
 class GetAddAutoTasks(APIView):
     permission_classes = [IsAuthenticated, AutoTaskPerms]
 
+    @extend_schema(
+        tags=["autotasks"],
+        summary="List automated tasks",
+        description="Lists automated tasks. With no path parameter, returns all tasks the "
+        "user may view. When an agent_id is supplied, returns that agent's tasks "
+        "(including policy-inherited tasks). When a policy id is supplied, returns the "
+        "tasks defined on that policy.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+                description="Agent id to list tasks for.",
+            ),
+            OpenApiParameter(
+                "policy", OpenApiTypes.INT, OpenApiParameter.PATH,
+                description="Policy id to list tasks for.",
+            ),
+        ],
+        responses=TaskSerializer(many=True),
+    )
     def get(self, request, agent_id=None, policy=None):
         if agent_id:
             agent = get_object_or_404(Agent, agent_id=agent_id)
@@ -31,6 +59,29 @@ class GetAddAutoTasks(APIView):
             tasks = AutomatedTask.objects.filter_by_role(request.user)  # type: ignore
         return Response(TaskSerializer(tasks, many=True).data)
 
+    @extend_schema(
+        tags=["autotasks"],
+        summary="Add an automated task",
+        description="Creates an automated task. When an `agent` (agent_id string) is "
+        "supplied, the task is attached to that agent and scheduled on it; otherwise "
+        "the task is created against a policy. Onboarding tasks require agent >= 2.6.0.",
+        request=TaskSerializer,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message"),
+            400: OpenApiResponse(description="Validation or agent version error"),
+        },
+        examples=[
+            OpenApiExample(
+                "Add task to an agent",
+                value={
+                    "agent": "abc123-agent-id",
+                    "name": "Nightly cleanup",
+                    "task_type": "daily",
+                },
+                request_only=True,
+            )
+        ],
+    )
     def post(self, request):
         from autotasks.tasks import create_win_task_schedule
 
@@ -62,9 +113,22 @@ class GetAddAutoTasks(APIView):
         )
 
 
+@extend_schema(
+    tags=["autotasks"],
+    parameters=[
+        OpenApiParameter(
+            "pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+            description="Automated task primary key.",
+        )
+    ],
+)
 class GetEditDeleteAutoTask(APIView):
     permission_classes = [IsAuthenticated, AutoTaskPerms]
 
+    @extend_schema(
+        summary="Get an automated task",
+        responses=TaskSerializer,
+    )
     def get(self, request, pk):
         task = get_object_or_404(AutomatedTask, pk=pk)
 
@@ -73,6 +137,11 @@ class GetEditDeleteAutoTask(APIView):
 
         return Response(TaskSerializer(task).data)
 
+    @extend_schema(
+        summary="Update an automated task",
+        request=TaskSerializer,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def put(self, request, pk):
         task = get_object_or_404(AutomatedTask, pk=pk)
 
@@ -85,6 +154,10 @@ class GetEditDeleteAutoTask(APIView):
 
         return Response("The task was updated")
 
+    @extend_schema(
+        summary="Delete an automated task",
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def delete(self, request, pk):
         from autotasks.tasks import delete_win_task_schedule
 
@@ -105,6 +178,29 @@ class GetEditDeleteAutoTask(APIView):
 class RunAutoTask(APIView):
     permission_classes = [IsAuthenticated, RunAutoTaskPerms]
 
+    @extend_schema(
+        tags=["autotasks"],
+        summary="Run an automated task",
+        description="Queues an automated task to run now. If `agent_id` is provided in the "
+        "body, runs the (policy) task against that specific agent; otherwise runs the task "
+        "against its own agent.",
+        parameters=[
+            OpenApiParameter(
+                "pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+                description="Automated task primary key.",
+            )
+        ],
+        request=inline_serializer(
+            name="AutoTasksRunTaskRequest",
+            fields={
+                "agent_id": serializers.CharField(
+                    required=False,
+                    help_text="Agent id to run a policy task against.",
+                ),
+            },
+        ),
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def post(self, request, pk):
         from autotasks.tasks import run_win_task
 

@@ -3,6 +3,15 @@ from datetime import datetime as dt
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone as djangotime
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    inline_serializer,
+)
+from rest_framework import serializers
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -22,6 +31,58 @@ from .tasks import cache_agents_alert_template
 class GetAddAlerts(APIView):
     permission_classes = [IsAuthenticated, AlertPerms]
 
+    @extend_schema(
+        tags=["alerts"],
+        summary="List/filter alerts",
+        description="Returns alerts the user is allowed to view. Behavior depends on the "
+        "request body: supply `top` for the dashboard's top-N unresolved/unsnoozed alerts "
+        "(with a total count), supply any of the filter keys to filter, or send an empty "
+        "body to list all alerts.",
+        request=inline_serializer(
+            name="AlertsListFilterRequest",
+            fields={
+                "top": serializers.IntegerField(
+                    required=False,
+                    help_text="Return the top N unresolved/unsnoozed/unhidden alerts "
+                    "plus a total count.",
+                ),
+                "timeFilter": serializers.IntegerField(
+                    required=False, help_text="Number of days back to include."
+                ),
+                "clientFilter": serializers.ListField(
+                    child=serializers.IntegerField(),
+                    required=False,
+                    help_text="List of client ids to filter by.",
+                ),
+                "severityFilter": serializers.ListField(
+                    child=serializers.CharField(),
+                    required=False,
+                    help_text="List of severities to filter by.",
+                ),
+                "resolvedFilter": serializers.BooleanField(required=False),
+                "snoozedFilter": serializers.BooleanField(required=False),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(
+                response=AlertSerializer(many=True),
+                description="A list of alerts, or (when `top` is supplied) an object "
+                "with `alerts_count` and `alerts`.",
+            )
+        },
+        examples=[
+            OpenApiExample(
+                "Top 10 for dashboard",
+                value={"top": 10},
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Filter by client and severity",
+                value={"clientFilter": [1, 2], "severityFilter": ["error"]},
+                request_only=True,
+            ),
+        ],
+    )
     def patch(self, request):
         # top 10 alerts for dashboard icon
         if "top" in request.data.keys():
@@ -108,6 +169,12 @@ class GetAddAlerts(APIView):
             alerts = Alert.objects.filter_by_role(request.user)  # type: ignore
             return Response(AlertSerializer(alerts, many=True).data)
 
+    @extend_schema(
+        tags=["alerts"],
+        summary="Create an alert",
+        request=AlertSerializer,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def post(self, request):
         serializer = AlertSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -116,13 +183,47 @@ class GetAddAlerts(APIView):
         return Response("ok")
 
 
+@extend_schema(
+    tags=["alerts"],
+    parameters=[
+        OpenApiParameter("pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+                         description="Alert primary key.")
+    ],
+)
 class GetUpdateDeleteAlert(APIView):
     permission_classes = [IsAuthenticated, AlertPerms]
 
+    @extend_schema(summary="Get a single alert", responses=AlertSerializer)
     def get(self, request, pk):
         alert = get_object_or_404(Alert, pk=pk)
         return Response(AlertSerializer(alert).data)
 
+    @extend_schema(
+        summary="Update an alert",
+        description="Updates an alert. When `type` is supplied, performs a shortcut "
+        "action: `resolve`, `snooze` (requires `snooze_days`), or `unsnooze`. Otherwise "
+        "the request body is treated as a partial alert update.",
+        request=inline_serializer(
+            name="AlertsUpdateAlertRequest",
+            fields={
+                "type": serializers.ChoiceField(
+                    choices=["resolve", "snooze", "unsnooze"], required=False
+                ),
+                "snooze_days": serializers.IntegerField(
+                    required=False,
+                    help_text="Number of days to snooze for. Required when type=snooze.",
+                ),
+            },
+        ),
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+        examples=[
+            OpenApiExample(
+                "Snooze for 7 days",
+                value={"type": "snooze", "snooze_days": 7},
+                request_only=True,
+            ),
+        ],
+    )
     def put(self, request, pk):
         alert = get_object_or_404(Alert, pk=pk)
 
@@ -165,6 +266,10 @@ class GetUpdateDeleteAlert(APIView):
 
         return Response("ok")
 
+    @extend_schema(
+        summary="Delete an alert",
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def delete(self, request, pk):
         Alert.objects.get(pk=pk).delete()
 
@@ -174,6 +279,35 @@ class GetUpdateDeleteAlert(APIView):
 class BulkAlerts(APIView):
     permission_classes = [IsAuthenticated, AlertPerms]
 
+    @extend_schema(
+        tags=["alerts"],
+        summary="Bulk alert action",
+        description="Performs a bulk action on the given alert ids. `bulk_action` may be "
+        "`resolve` or `snooze` (which requires `snooze_days`).",
+        request=inline_serializer(
+            name="AlertsBulkActionRequest",
+            fields={
+                "bulk_action": serializers.ChoiceField(choices=["resolve", "snooze"]),
+                "alerts": serializers.ListField(
+                    child=serializers.IntegerField(),
+                    help_text="List of alert ids to act on.",
+                ),
+                "snooze_days": serializers.IntegerField(
+                    required=False,
+                    help_text="Number of days to snooze for. Required when "
+                    "bulk_action=snooze.",
+                ),
+            },
+        ),
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+        examples=[
+            OpenApiExample(
+                "Resolve several alerts",
+                value={"bulk_action": "resolve", "alerts": [1, 2, 3]},
+                request_only=True,
+            ),
+        ],
+    )
     def post(self, request):
         if request.data["bulk_action"] == "resolve":
             Alert.objects.filter_by_role(request.user).filter(
@@ -202,10 +336,21 @@ class BulkAlerts(APIView):
 class GetAddAlertTemplates(APIView):
     permission_classes = [IsAuthenticated, AlertTemplatePerms]
 
+    @extend_schema(
+        tags=["alerts"],
+        summary="List alert templates",
+        responses=AlertTemplateSerializer(many=True),
+    )
     def get(self, request):
         alert_templates = AlertTemplate.objects.all()
         return Response(AlertTemplateSerializer(alert_templates, many=True).data)
 
+    @extend_schema(
+        tags=["alerts"],
+        summary="Create an alert template",
+        request=AlertTemplateSerializer,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def post(self, request):
         serializer = AlertTemplateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -217,14 +362,27 @@ class GetAddAlertTemplates(APIView):
         return Response("ok")
 
 
+@extend_schema(
+    tags=["alerts"],
+    parameters=[
+        OpenApiParameter("pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+                         description="Alert template primary key.")
+    ],
+)
 class GetUpdateDeleteAlertTemplate(APIView):
     permission_classes = [IsAuthenticated, AlertTemplatePerms]
 
+    @extend_schema(summary="Get a single alert template", responses=AlertTemplateSerializer)
     def get(self, request, pk):
         alert_template = get_object_or_404(AlertTemplate, pk=pk)
 
         return Response(AlertTemplateSerializer(alert_template).data)
 
+    @extend_schema(
+        summary="Update an alert template",
+        request=AlertTemplateSerializer,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def put(self, request, pk):
         alert_template = get_object_or_404(AlertTemplate, pk=pk)
 
@@ -239,6 +397,10 @@ class GetUpdateDeleteAlertTemplate(APIView):
 
         return Response("ok")
 
+    @extend_schema(
+        summary="Delete an alert template",
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def delete(self, request, pk):
         get_object_or_404(AlertTemplate, pk=pk).delete()
 
@@ -248,9 +410,22 @@ class GetUpdateDeleteAlertTemplate(APIView):
         return Response("ok")
 
 
+@extend_schema(
+    tags=["alerts"],
+    parameters=[
+        OpenApiParameter("pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+                         description="Alert template primary key.")
+    ],
+)
 class RelatedAlertTemplate(APIView):
     permission_classes = [IsAuthenticated, AlertTemplatePerms]
 
+    @extend_schema(
+        summary="Get alert template relations",
+        description="Returns the alert template with its related policies, clients and "
+        "sites expanded.",
+        responses=AlertTemplateRelationSerializer,
+    )
     def get(self, request, pk):
         alert_template = get_object_or_404(AlertTemplate, pk=pk)
         return Response(AlertTemplateRelationSerializer(alert_template).data)

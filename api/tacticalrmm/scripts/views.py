@@ -2,6 +2,15 @@ import asyncio
 
 from django.conf import settings
 from django.shortcuts import get_object_or_404
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    inline_serializer,
+)
+from rest_framework import serializers
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -25,6 +34,32 @@ from .serializers import (
 class GetAddScripts(APIView):
     permission_classes = [IsAuthenticated, ScriptsPerms]
 
+    @extend_schema(
+        tags=["scripts"],
+        summary="List all scripts",
+        description="Returns all scripts for the scripts table. By default community "
+        "(built-in) scripts are included and hidden scripts are excluded; control this "
+        "with the showCommunityScripts and showHiddenScripts query parameters.",
+        parameters=[
+            OpenApiParameter(
+                "showCommunityScripts",
+                OpenApiTypes.BOOL,
+                OpenApiParameter.QUERY,
+                required=False,
+                description="Include community/built-in scripts. Defaults to true. "
+                "Set to 'false' to return only user-defined scripts.",
+            ),
+            OpenApiParameter(
+                "showHiddenScripts",
+                OpenApiTypes.BOOL,
+                OpenApiParameter.QUERY,
+                required=False,
+                description="Include hidden scripts. Defaults to false. "
+                "Set to 'true' to include hidden scripts.",
+            ),
+        ],
+        responses=ScriptTableSerializer(many=True),
+    )
     def get(self, request):
         showCommunityScripts = request.GET.get("showCommunityScripts", True)
         showHiddenScripts = request.GET.get("showHiddenScripts", False)
@@ -41,6 +76,14 @@ class GetAddScripts(APIView):
             ScriptTableSerializer(scripts.order_by("category"), many=True).data
         )
 
+    @extend_schema(
+        tags=["scripts"],
+        summary="Add a script",
+        request=ScriptSerializer,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def post(self, request):
         serializer = ScriptSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -51,13 +94,37 @@ class GetAddScripts(APIView):
         return Response(f"{obj.name} was added!")
 
 
+@extend_schema(
+    tags=["scripts"],
+    parameters=[
+        OpenApiParameter(
+            "pk",
+            OpenApiTypes.INT,
+            OpenApiParameter.PATH,
+            description="Script primary key.",
+        )
+    ],
+)
 class GetUpdateDeleteScript(APIView):
     permission_classes = [IsAuthenticated, ScriptsPerms]
 
+    @extend_schema(
+        summary="Get a single script",
+        responses=ScriptSerializer,
+    )
     def get(self, request, pk):
         script = get_object_or_404(Script, pk=pk)
         return Response(ScriptSerializer(script).data)
 
+    @extend_schema(
+        summary="Update a script",
+        description="Updates a script. Built-in/community scripts can only have their "
+        "'favorite' or 'hidden' flags changed; any other edit is rejected.",
+        request=ScriptSerializer,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def put(self, request, pk):
         script = get_object_or_404(Script.objects.prefetch_related("script"), pk=pk)
 
@@ -86,6 +153,14 @@ class GetUpdateDeleteScript(APIView):
 
         return Response(f"{obj.name} was edited!")
 
+    @extend_schema(
+        summary="Delete a script",
+        description="Deletes a user-defined script. Built-in/community scripts cannot "
+        "be deleted.",
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def delete(self, request, pk):
         script = get_object_or_404(Script, pk=pk)
 
@@ -100,10 +175,23 @@ class GetUpdateDeleteScript(APIView):
 class GetAddScriptSnippets(APIView):
     permission_classes = [IsAuthenticated, ScriptsPerms]
 
+    @extend_schema(
+        tags=["scripts"],
+        summary="List all script snippets",
+        responses=ScriptSnippetSerializer(many=True),
+    )
     def get(self, request):
         snippets = ScriptSnippet.objects.all()
         return Response(ScriptSnippetSerializer(snippets, many=True).data)
 
+    @extend_schema(
+        tags=["scripts"],
+        summary="Add a script snippet",
+        request=ScriptSnippetSerializer,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def post(self, request):
         serializer = ScriptSnippetSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -112,13 +200,35 @@ class GetAddScriptSnippets(APIView):
         return Response("Script snippet was saved successfully")
 
 
+@extend_schema(
+    tags=["scripts"],
+    parameters=[
+        OpenApiParameter(
+            "pk",
+            OpenApiTypes.INT,
+            OpenApiParameter.PATH,
+            description="Script snippet primary key.",
+        )
+    ],
+)
 class GetUpdateDeleteScriptSnippet(APIView):
     permission_classes = [IsAuthenticated, ScriptsPerms]
 
+    @extend_schema(
+        summary="Get a single script snippet",
+        responses=ScriptSnippetSerializer,
+    )
     def get(self, request, pk):
         snippet = get_object_or_404(ScriptSnippet, pk=pk)
         return Response(ScriptSnippetSerializer(snippet).data)
 
+    @extend_schema(
+        summary="Update a script snippet",
+        request=ScriptSnippetSerializer,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def put(self, request, pk):
         snippet = get_object_or_404(ScriptSnippet, pk=pk)
 
@@ -130,6 +240,12 @@ class GetUpdateDeleteScriptSnippet(APIView):
 
         return Response("Script snippet was saved successfully")
 
+    @extend_schema(
+        summary="Delete a script snippet",
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def delete(self, request, pk):
         snippet = get_object_or_404(ScriptSnippet, pk=pk)
         snippet.delete()
@@ -140,6 +256,59 @@ class GetUpdateDeleteScriptSnippet(APIView):
 class TestScript(APIView):
     permission_classes = [IsAuthenticated, RunScriptPerms]
 
+    @extend_schema(
+        tags=["scripts"],
+        summary="Test run a script on an agent",
+        description="Runs an ad-hoc script (code + shell + args/env) against the given "
+        "agent over NATS and returns the raw command output. The run is recorded in the "
+        "audit log.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id",
+                OpenApiTypes.STR,
+                OpenApiParameter.PATH,
+                description="Agent identifier (agent_id).",
+            )
+        ],
+        request=inline_serializer(
+            name="ScriptsTestScriptRequest",
+            fields={
+                "code": serializers.CharField(help_text="Script body to execute."),
+                "shell": serializers.CharField(help_text="Script shell/interpreter."),
+                "args": serializers.ListField(
+                    child=serializers.CharField(), help_text="Script arguments."
+                ),
+                "env_vars": serializers.ListField(
+                    child=serializers.CharField(), help_text="Environment variables."
+                ),
+                "timeout": serializers.IntegerField(
+                    help_text="Execution timeout in seconds."
+                ),
+                "run_as_user": serializers.BooleanField(
+                    help_text="Run the script in the logged-on user's context."
+                ),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(
+                OpenApiTypes.STR, description="Raw script execution output"
+            )
+        },
+        examples=[
+            OpenApiExample(
+                "Test a PowerShell script",
+                value={
+                    "code": "Write-Output 'hello'",
+                    "shell": "powershell",
+                    "args": [],
+                    "env_vars": [],
+                    "timeout": 90,
+                    "run_as_user": False,
+                },
+                request_only=True,
+            )
+        ],
+    )
     def post(self, request, agent_id):
         from agents.models import Agent
 
@@ -185,6 +354,38 @@ class TestScript(APIView):
         return Response(r)
 
 
+@extend_schema(
+    tags=["scripts"],
+    summary="Download a script's code",
+    description="Returns the script filename (with shell-appropriate extension) and its "
+    "code. By default referenced snippets are expanded into the code; pass "
+    "with_snippets=false to return the raw code without snippet expansion.",
+    parameters=[
+        OpenApiParameter(
+            "pk",
+            OpenApiTypes.INT,
+            OpenApiParameter.PATH,
+            description="Script primary key.",
+        ),
+        OpenApiParameter(
+            "with_snippets",
+            OpenApiTypes.BOOL,
+            OpenApiParameter.QUERY,
+            required=False,
+            description="Expand snippets into the returned code. Defaults to true. "
+            "Set to 'false' to return code without snippet expansion.",
+        ),
+    ],
+    responses={
+        200: inline_serializer(
+            name="ScriptsDownloadResponse",
+            fields={
+                "filename": serializers.CharField(),
+                "code": serializers.CharField(),
+            },
+        )
+    },
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, ScriptsPerms])
 def download(request, pk):

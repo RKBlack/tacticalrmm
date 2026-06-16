@@ -1,3 +1,5 @@
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from rest_framework.serializers import (
     ModelSerializer,
     ReadOnlyField,
@@ -34,6 +36,7 @@ class PolicyTableSerializer(ModelSerializer):
         model = Policy
         fields = "__all__"
 
+    @extend_schema_field(OpenApiTypes.INT)
     def get_agents_count(self, policy):
         return policy.related_agents().count()
 
@@ -45,6 +48,7 @@ class PolicyRelatedSerializer(ModelSerializer):
     server_sites = SerializerMethodField()
     agents = SerializerMethodField()
 
+    @extend_schema_field(AgentHostnameSerializer(many=True))
     def get_agents(self, policy):
         return AgentHostnameSerializer(
             policy.agents.filter_by_role(self.context["user"]).only(
@@ -53,21 +57,25 @@ class PolicyRelatedSerializer(ModelSerializer):
             many=True,
         ).data
 
+    @extend_schema_field(ClientMinimumSerializer(many=True))
     def get_workstation_clients(self, policy):
         return ClientMinimumSerializer(
             policy.workstation_clients.filter_by_role(self.context["user"]), many=True
         ).data
 
+    @extend_schema_field(ClientMinimumSerializer(many=True))
     def get_server_clients(self, policy):
         return ClientMinimumSerializer(
             policy.server_clients.filter_by_role(self.context["user"]), many=True
         ).data
 
+    @extend_schema_field(SiteMinimumSerializer(many=True))
     def get_workstation_sites(self, policy):
         return SiteMinimumSerializer(
             policy.workstation_sites.filter_by_role(self.context["user"]), many=True
         ).data
 
+    @extend_schema_field(SiteMinimumSerializer(many=True))
     def get_server_sites(self, policy):
         return SiteMinimumSerializer(
             policy.server_sites.filter_by_role(self.context["user"]), many=True
@@ -102,6 +110,7 @@ class PolicyOverviewSerializer(ModelSerializer):
     workstation_policy = PolicySerializer(read_only=True)
     server_policy = PolicySerializer(read_only=True)
 
+    @extend_schema_field(PolicyOverviewSiteSerializer(many=True))
     def get_sites(self, obj):
         return PolicyOverviewSiteSerializer(
             obj.filtered_sites,

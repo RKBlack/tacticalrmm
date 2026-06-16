@@ -1,3 +1,6 @@
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
+from rest_framework import serializers
 from rest_framework.fields import SerializerMethodField
 from rest_framework.serializers import ModelSerializer, ReadOnlyField
 
@@ -9,10 +12,10 @@ from .models import Alert, AlertTemplate
 
 
 class AlertSerializer(ModelSerializer):
-    hostname = ReadOnlyField(source="assigned_agent.hostname")
-    agent_id = ReadOnlyField(source="assigned_agent.agent_id")
-    client = ReadOnlyField(source="client.name")
-    site = ReadOnlyField(source="site.name")
+    hostname = serializers.CharField(source="assigned_agent.hostname", read_only=True)
+    agent_id = serializers.CharField(source="assigned_agent.agent_id", read_only=True)
+    client = serializers.CharField(source="client.name", read_only=True)
+    site = serializers.CharField(source="site.name", read_only=True)
     alert_time = ReadOnlyField()
 
     class Meta:
@@ -34,12 +37,14 @@ class AlertTemplateSerializer(ModelSerializer):
         model = AlertTemplate
         fields = "__all__"
 
+    @extend_schema_field(OpenApiTypes.STR)
     def get_action_name(self, obj):
         if obj.action_type == AlertTemplateActionType.REST and obj.action_rest:
             return obj.action_rest.name
 
         return obj.action.name if obj.action else ""
 
+    @extend_schema_field(OpenApiTypes.STR)
     def get_resolved_action_name(self, obj):
         if (
             obj.resolved_action_type == AlertTemplateActionType.REST
@@ -49,6 +54,7 @@ class AlertTemplateSerializer(ModelSerializer):
 
         return obj.resolved_action.name if obj.resolved_action else ""
 
+    @extend_schema_field(OpenApiTypes.INT)
     def get_applied_count(self, instance):
         return (
             instance.policies.count()

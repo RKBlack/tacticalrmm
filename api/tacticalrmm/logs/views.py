@@ -5,6 +5,15 @@ from django.core.paginator import Paginator
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone as djangotime
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    inline_serializer,
+)
+from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -24,6 +33,76 @@ from .serializers import AuditLogSerializer, DebugLogSerializer, PendingActionSe
 class GetAuditLogs(APIView):
     permission_classes = [IsAuthenticated, AuditLogPerms]
 
+    @extend_schema(
+        tags=["logs"],
+        summary="Query audit logs (paginated)",
+        description="Returns a paginated page of audit log entries, filtered by the "
+        "supplied agent/client, user, action, object type and time-range filters. "
+        "Pagination is driven by the `pagination` object in the request body.",
+        request=inline_serializer(
+            name="LogsAuditLogQueryRequest",
+            fields={
+                "pagination": inline_serializer(
+                    name="LogsAuditLogPagination",
+                    fields={
+                        "page": serializers.IntegerField(),
+                        "rowsPerPage": serializers.IntegerField(),
+                        "sortBy": serializers.CharField(),
+                        "descending": serializers.BooleanField(),
+                    },
+                ),
+                "agentFilter": serializers.ListField(
+                    child=serializers.CharField(), required=False,
+                    help_text="List of agent_id values to filter by.",
+                ),
+                "clientFilter": serializers.ListField(
+                    child=serializers.IntegerField(), required=False,
+                    help_text="List of client ids to filter by (ignored if agentFilter set).",
+                ),
+                "userFilter": serializers.ListField(
+                    child=serializers.CharField(), required=False,
+                    help_text="List of usernames to filter by.",
+                ),
+                "actionFilter": serializers.ListField(
+                    child=serializers.CharField(), required=False,
+                    help_text="List of action types to filter by.",
+                ),
+                "objectFilter": serializers.ListField(
+                    child=serializers.CharField(), required=False,
+                    help_text="List of object types to filter by.",
+                ),
+                "timeFilter": serializers.IntegerField(
+                    required=False,
+                    help_text="Number of days back from today to include.",
+                ),
+            },
+        ),
+        responses={
+            200: inline_serializer(
+                name="LogsAuditLogQueryResponse",
+                fields={
+                    "audit_logs": AuditLogSerializer(many=True),
+                    "total": serializers.IntegerField(),
+                },
+            )
+        },
+        examples=[
+            OpenApiExample(
+                "Filter by client over last 30 days",
+                value={
+                    "pagination": {
+                        "page": 1,
+                        "rowsPerPage": 25,
+                        "sortBy": "entry_time",
+                        "descending": True,
+                    },
+                    "clientFilter": [1],
+                    "timeFilter": 30,
+                },
+                request_only=True,
+            )
+        ],
+    )
     def patch(self, request):
         from agents.models import Agent
         from clients.models import Client
@@ -94,6 +173,20 @@ class GetAuditLogs(APIView):
 class PendingActions(APIView):
     permission_classes = [IsAuthenticated, PendingActionPerms]
 
+    @extend_schema(
+        tags=["logs"],
+        summary="List pending actions",
+        description="Lists pending actions. If an `agent_id` is supplied in the path, "
+        "only that agent's pending actions are returned; otherwise all pending actions "
+        "the user may view are returned.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+                description="Agent id to scope pending actions to.",
+            )
+        ],
+        responses=PendingActionSerializer(many=True),
+    )
     def get(self, request, agent_id=None):
         if agent_id:
             agent = get_object_or_404(
@@ -117,6 +210,20 @@ class PendingActions(APIView):
 
         return Response(PendingActionSerializer(actions, many=True).data)
 
+    @extend_schema(
+        tags=["logs"],
+        summary="Cancel a pending action",
+        description="Cancels/deletes a pending action. If the action is a scheduled "
+        "reboot, the scheduled task is also removed on the agent.",
+        parameters=[
+            OpenApiParameter(
+                "pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+                description="Pending action primary key.",
+            )
+        ],
+        request=None,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def delete(self, request, pk):
         action = get_object_or_404(PendingAction, pk=pk)
 
@@ -139,6 +246,27 @@ class PendingActions(APIView):
 class GetDebugLog(APIView):
     permission_classes = [IsAuthenticated, DebugLogPerms]
 
+    @extend_schema(
+        tags=["logs"],
+        summary="Query debug logs",
+        description="Returns up to the most recent 1000 debug log entries, filtered by "
+        "the supplied log type, log level and agent filters.",
+        request=inline_serializer(
+            name="LogsDebugLogQueryRequest",
+            fields={
+                "logTypeFilter": serializers.CharField(
+                    required=False, help_text="Log type to filter by."
+                ),
+                "logLevelFilter": serializers.CharField(
+                    required=False, help_text="Log level to filter by."
+                ),
+                "agentFilter": serializers.CharField(
+                    required=False, help_text="Agent id to filter by."
+                ),
+            },
+        ),
+        responses=DebugLogSerializer(many=True),
+    )
     def patch(self, request):
         agentFilter = Q()
         logTypeFilter = Q()

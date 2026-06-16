@@ -1,4 +1,6 @@
 from django.core.cache import cache
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from tacticalrmm.constants import (
@@ -37,12 +39,12 @@ class AgentSerializer(serializers.ModelSerializer):
     cpu_model = serializers.ReadOnlyField()
     local_ips = serializers.ReadOnlyField()
     make_model = serializers.ReadOnlyField()
-    physical_disks = serializers.ReadOnlyField()
+    physical_disks = serializers.ListField(read_only=True)
     graphics = serializers.ReadOnlyField()
     checks = serializers.ReadOnlyField()
     timezone = serializers.ReadOnlyField()
     all_timezones = serializers.SerializerMethodField()
-    client = serializers.ReadOnlyField(source="client.name")
+    client = serializers.CharField(source="client.name", read_only=True)
     site_name = serializers.ReadOnlyField(source="site.name")
     custom_fields = AgentCustomFieldSerializer(many=True, read_only=True)
     patches_last_installed = serializers.ReadOnlyField()
@@ -52,9 +54,11 @@ class AgentSerializer(serializers.ModelSerializer):
     alert_template = serializers.SerializerMethodField()
     effective_default_shell = serializers.SerializerMethodField()
 
+    @extend_schema_field(OpenApiTypes.STR)
     def get_effective_default_shell(self, obj):
         return obj.effective_default_shell
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_alert_template(self, obj):
         from alerts.serializers import AlertTemplateSerializer
 
@@ -64,9 +68,11 @@ class AgentSerializer(serializers.ModelSerializer):
             else None
         )
 
+    @extend_schema_field(WinUpdatePolicySerializer)
     def get_effective_patch_policy(self, obj):
         return WinUpdatePolicySerializer(obj.get_patch_policy()).data
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_applied_policies(self, obj):
         from automation.serializers import PolicySerializer
 
@@ -79,6 +85,7 @@ class AgentSerializer(serializers.ModelSerializer):
 
         return policies
 
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_all_timezones(self, obj):
         return ALL_TIMEZONES
 
@@ -102,7 +109,7 @@ class AgentTableSerializer(serializers.ModelSerializer):
     graphics = serializers.ReadOnlyField()
     local_ips = serializers.ReadOnlyField()
     make_model = serializers.ReadOnlyField()
-    physical_disks = serializers.ReadOnlyField()
+    physical_disks = serializers.ListField(read_only=True)
     serial_number = serializers.ReadOnlyField()
     custom_fields = AgentCustomFieldSerializer(many=True, read_only=True)
 
@@ -125,6 +132,7 @@ class AgentTableSerializer(serializers.ModelSerializer):
     def get_pending_actions_count(self, obj) -> int:
         return getattr(obj, "_pending_actions_count", 0)
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_alert_template(self, obj):
         if not obj.alert_template:
             return None
@@ -188,7 +196,7 @@ class AgentTableSerializer(serializers.ModelSerializer):
 
 
 class AgentHostnameSerializer(serializers.ModelSerializer):
-    client = serializers.ReadOnlyField(source="client.name")
+    client = serializers.CharField(read_only=True, source="client.name")
     site = serializers.ReadOnlyField(source="site.name")
 
     class Meta:
@@ -232,16 +240,20 @@ class AgentTerminalDefaultsSerializer(serializers.ModelSerializer):
     terminal_mode = serializers.SerializerMethodField()
     supports_new_terminal = serializers.SerializerMethodField()
 
+    @extend_schema_field(OpenApiTypes.STR)
     def get_effective_default_shell(self, obj):
         return obj.effective_default_shell
 
+    @extend_schema_field(OpenApiTypes.STR)
     def get_resolved_default_shell(self, obj):
         return obj.resolved_default_shell
 
+    @extend_schema_field(OpenApiTypes.STR)
     def get_terminal_mode(self, obj):
         settings = self.context.get("core_settings")
         return settings.terminal_mode if settings else TerminalModeChoices.NEW
 
+    @extend_schema_field(OpenApiTypes.BOOL)
     def get_supports_new_terminal(self, obj):
         return self.context.get("supports_new_terminal", True)
 

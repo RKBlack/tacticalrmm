@@ -2,6 +2,15 @@ import asyncio
 from typing import Any
 
 from django.shortcuts import get_object_or_404
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    inline_serializer,
+)
+from rest_framework import serializers
 from rest_framework.decorators import api_view
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -17,6 +26,20 @@ from .permissions import SoftwarePerms, UninstallSoftwarePerms
 from .serializers import InstalledSoftwareSerializer
 
 
+@extend_schema(
+    tags=["software"],
+    summary="List available Chocolatey packages",
+    description="Returns the most recently cached Chocolatey software catalog as a "
+    "mapping of package name to package metadata. Returns an empty object if no "
+    "catalog has been cached yet.",
+    request=None,
+    responses={
+        200: OpenApiResponse(
+            OpenApiTypes.OBJECT,
+            description="Chocolatey package catalog keyed by package name.",
+        )
+    },
+)
 @api_view(["GET"])
 def chocos(request):
     chocos = ChocoSoftware.objects.last()
@@ -30,6 +53,23 @@ class GetSoftware(APIView):
     permission_classes = [IsAuthenticated, SoftwarePerms]
 
     # get software list
+    @extend_schema(
+        tags=["software"],
+        summary="List installed software",
+        description="If `agent_id` is supplied, returns the installed software record "
+        "for that agent (or an empty list if none has been collected). Without "
+        "`agent_id`, returns installed software for every agent the user can view.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id",
+                OpenApiTypes.STR,
+                OpenApiParameter.PATH,
+                description="Agent id. Omit to list software across all viewable agents.",
+            )
+        ],
+        request=None,
+        responses=InstalledSoftwareSerializer(many=True),
+    )
     def get(self, request, agent_id=None):
         if agent_id:
             agent = get_object_or_404(Agent, agent_id=agent_id)
@@ -44,6 +84,40 @@ class GetSoftware(APIView):
             return Response(InstalledSoftwareSerializer(software, many=True).data)
 
     # software install
+    @extend_schema(
+        tags=["software"],
+        summary="Install software via Chocolatey",
+        description="Queues a Chocolatey install of the named package on the agent and "
+        "dispatches the command over NATS. Not available for POSIX agents.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id",
+                OpenApiTypes.STR,
+                OpenApiParameter.PATH,
+                description="Agent id.",
+            )
+        ],
+        request=inline_serializer(
+            name="SoftwareInstallRequest",
+            fields={
+                "name": serializers.CharField(
+                    help_text="Chocolatey package name to install."
+                ),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(
+                OpenApiTypes.STR, description="Confirmation message"
+            )
+        },
+        examples=[
+            OpenApiExample(
+                "Install 7zip",
+                value={"name": "7zip"},
+                request_only=True,
+            )
+        ],
+    )
     def post(self, request, agent_id):
         agent = get_object_or_404(Agent, agent_id=agent_id)
         if agent.is_posix:
@@ -73,6 +147,24 @@ class GetSoftware(APIView):
         )
 
     # refresh software list
+    @extend_schema(
+        tags=["software"],
+        summary="Refresh installed software list",
+        description="Requests the current software inventory from the agent over NATS "
+        "and stores it. Not available for POSIX agents.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id",
+                OpenApiTypes.STR,
+                OpenApiParameter.PATH,
+                description="Agent id.",
+            )
+        ],
+        request=None,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def put(self, request, agent_id):
         agent = get_object_or_404(Agent, agent_id=agent_id)
         if agent.is_posix:
@@ -92,9 +184,58 @@ class GetSoftware(APIView):
         return Response("ok")
 
 
+@extend_schema(
+    tags=["software"],
+    parameters=[
+        OpenApiParameter(
+            "agent_id",
+            OpenApiTypes.STR,
+            OpenApiParameter.PATH,
+            description="Agent id.",
+        )
+    ],
+)
 class UninstallSoftware(APIView):
     permission_classes = [IsAuthenticated, UninstallSoftwarePerms]
 
+    @extend_schema(
+        summary="Uninstall software",
+        description="Runs the supplied uninstall command on the agent over NATS. The "
+        "Tactical RMM agent itself cannot be uninstalled through this endpoint. Not "
+        "available for POSIX agents.",
+        request=inline_serializer(
+            name="SoftwareUninstallRequest",
+            fields={
+                "name": serializers.CharField(
+                    help_text="Display name of the software being uninstalled."
+                ),
+                "command": serializers.CharField(
+                    help_text="Raw uninstall command to execute (run via cmd shell)."
+                ),
+                "timeout": serializers.IntegerField(
+                    help_text="Command timeout in seconds."
+                ),
+                "run_as_user": serializers.BooleanField(
+                    help_text="Whether to run the command as the logged-in user."
+                ),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+        examples=[
+            OpenApiExample(
+                "Uninstall example",
+                value={
+                    "name": "7zip",
+                    "command": "C:\\Program Files\\7-Zip\\Uninstall.exe /S",
+                    "timeout": 300,
+                    "run_as_user": False,
+                },
+                request_only=True,
+            )
+        ],
+    )
     def post(self, request, agent_id):
         agent = get_object_or_404(Agent, agent_id=agent_id)
         if agent.is_posix:

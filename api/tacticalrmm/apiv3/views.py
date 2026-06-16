@@ -8,7 +8,16 @@ from django.db.utils import IntegrityError
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone as djangotime
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    inline_serializer,
+)
 from packaging import version as pyver
+from rest_framework import serializers
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import IsAuthenticated
@@ -61,6 +70,17 @@ class CheckIn(APIView):
     permission_classes = [IsAuthenticated]
 
     # called once during tacticalagent windows service startup
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Agent startup check-in",
+        description="Internal agent endpoint. Called once during the tacticalagent "
+        "service startup. Triggers chocolatey install (if needed) and a Windows "
+        "updates scan over NATS. The agent is identified by its auth token.",
+        request=None,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Returns 'ok'.")
+        },
+    )
     def post(self, request):
         agent = get_object_or_404(
             Agent.objects.defer(*AGENT_DEFER),
@@ -77,6 +97,26 @@ class SyncMeshNodeID(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Sync MeshCentral node id",
+        description="Internal agent endpoint. The agent reports its MeshCentral node "
+        "id so it can be persisted on the Agent record. Optionally triggers a mesh "
+        "permissions sync task.",
+        request=inline_serializer(
+            name="ApiV3SyncMeshNodeIDRequest",
+            fields={
+                "nodeid": serializers.CharField(help_text="MeshCentral node id."),
+                "run_sync_task": serializers.BooleanField(
+                    required=False,
+                    help_text="If truthy, queues the mesh permissions sync task.",
+                ),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Returns 'ok'.")
+        },
+    )
     def post(self, request):
         agent = get_object_or_404(
             Agent.objects.defer(*AGENT_DEFER),
@@ -96,6 +136,23 @@ class Choco(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Report chocolatey install status",
+        description="Internal agent endpoint. The agent reports whether chocolatey "
+        "has been installed so the flag can be persisted on the Agent record.",
+        request=inline_serializer(
+            name="ApiV3ChocoRequest",
+            fields={
+                "installed": serializers.BooleanField(
+                    help_text="Whether chocolatey is installed on the agent."
+                ),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Returns 'ok'.")
+        },
+    )
     def post(self, request):
         agent = get_object_or_404(
             Agent.objects.defer(*AGENT_DEFER),
@@ -110,6 +167,24 @@ class WinUpdates(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Report reboot-needed state after updates",
+        description="Internal agent endpoint. The agent reports whether a reboot is "
+        "required after installing Windows updates. Honors the patch policy to "
+        "optionally trigger an immediate reboot over NATS.",
+        request=inline_serializer(
+            name="ApiV3WinUpdatesNeedsRebootRequest",
+            fields={
+                "needs_reboot": serializers.BooleanField(
+                    help_text="Whether the agent requires a reboot."
+                ),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Returns 'ok'.")
+        },
+    )
     def put(self, request):
         agent = get_object_or_404(
             Agent.objects.defer(*AGENT_DEFER),
@@ -139,6 +214,24 @@ class WinUpdates(APIView):
         agent.delete_superseded_updates()
         return Response("ok")
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Report a single update install result",
+        description="Internal agent endpoint. The agent reports the success/failure "
+        "result for a specific Windows update identified by its GUID.",
+        request=inline_serializer(
+            name="ApiV3WinUpdatesResultRequest",
+            fields={
+                "guid": serializers.CharField(help_text="Windows update GUID."),
+                "success": serializers.BooleanField(
+                    help_text="Whether the update installed successfully."
+                ),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Returns 'ok'.")
+        },
+    )
     def patch(self, request):
         agent = get_object_or_404(
             Agent.objects.defer(*AGENT_DEFER),
@@ -169,6 +262,50 @@ class WinUpdates(APIView):
         agent.delete_superseded_updates()
         return Response("ok")
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Submit the Windows update inventory",
+        description="Internal agent endpoint. The agent submits the list of Windows "
+        "updates discovered by the Windows Update Agent (WUA). Existing updates are "
+        "updated and new ones created.",
+        request=inline_serializer(
+            name="ApiV3WinUpdatesInventoryRequest",
+            fields={
+                "wua_updates": serializers.ListField(
+                    child=inline_serializer(
+                        name="ApiV3WinUpdateItem",
+                        fields={
+                            "guid": serializers.CharField(),
+                            "title": serializers.CharField(),
+                            "installed": serializers.BooleanField(),
+                            "downloaded": serializers.BooleanField(),
+                            "description": serializers.CharField(),
+                            "severity": serializers.CharField(),
+                            "categories": serializers.ListField(
+                                child=serializers.CharField()
+                            ),
+                            "category_ids": serializers.ListField(
+                                child=serializers.CharField()
+                            ),
+                            "kb_article_ids": serializers.ListField(
+                                child=serializers.CharField()
+                            ),
+                            "more_info_urls": serializers.ListField(
+                                child=serializers.CharField()
+                            ),
+                            "support_url": serializers.CharField(),
+                            "revision_number": serializers.IntegerField(),
+                        },
+                    ),
+                    help_text="List of Windows updates reported by the agent.",
+                ),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Returns 'ok'."),
+            400: OpenApiResponse(description="Empty payload."),
+        },
+    )
     def post(self, request):
         updates = request.data["wua_updates"]
         if not updates:
@@ -216,6 +353,23 @@ class SupersededWinUpdate(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Delete a superseded Windows update",
+        description="Internal agent endpoint. The agent reports a superseded update "
+        "by GUID; all matching WinUpdate records are deleted.",
+        request=inline_serializer(
+            name="ApiV3SupersededWinUpdateRequest",
+            fields={
+                "guid": serializers.CharField(
+                    help_text="GUID of the superseded Windows update."
+                ),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Returns 'ok'.")
+        },
+    )
     def post(self, request):
         agent = get_object_or_404(
             Agent.objects.defer(*AGENT_DEFER),
@@ -232,6 +386,31 @@ class RunChecks(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Get all checks to run",
+        description="Internal agent endpoint. Returns the full set of checks "
+        "(including policy checks) the agent should run, along with the agent pk "
+        "and check interval.",
+        parameters=[
+            OpenApiParameter(
+                "agentid",
+                OpenApiTypes.STR,
+                OpenApiParameter.PATH,
+                description="Agent id (the agent is also resolved via its auth token).",
+            )
+        ],
+        responses={
+            200: inline_serializer(
+                name="ApiV3RunChecksResponse",
+                fields={
+                    "agent": serializers.IntegerField(help_text="Agent primary key."),
+                    "check_interval": serializers.IntegerField(),
+                    "checks": CheckRunnerGetSerializer(many=True),
+                },
+            )
+        },
+    )
     def get(self, request, agentid):
         agent = get_object_or_404(
             Agent.objects.defer(*AGENT_DEFER).prefetch_related(
@@ -254,6 +433,31 @@ class CheckRunner(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Get checks that are due to run",
+        description="Internal agent endpoint. Returns only the checks whose run "
+        "interval has elapsed (or that have never run), along with the agent pk and "
+        "check interval.",
+        parameters=[
+            OpenApiParameter(
+                "agentid",
+                OpenApiTypes.STR,
+                OpenApiParameter.PATH,
+                description="Agent id (the agent is also resolved via its auth token).",
+            )
+        ],
+        responses={
+            200: inline_serializer(
+                name="ApiV3CheckRunnerGetResponse",
+                fields={
+                    "agent": serializers.IntegerField(help_text="Agent primary key."),
+                    "check_interval": serializers.IntegerField(),
+                    "checks": CheckRunnerGetSerializer(many=True),
+                },
+            )
+        },
+    )
     def get(self, request, agentid):
         agent = get_object_or_404(
             Agent.objects.defer(*AGENT_DEFER).prefetch_related(
@@ -288,6 +492,27 @@ class CheckRunner(APIView):
         }
         return Response(ret)
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Submit a check result",
+        description="Internal agent endpoint. The agent submits the result of a "
+        "single check run. Persists the result, evaluates pass/fail, and runs any "
+        "assigned tasks on failure. The exact accepted fields depend on the check "
+        "type.",
+        request=inline_serializer(
+            name="ApiV3CheckRunnerResultRequest",
+            fields={
+                "id": serializers.IntegerField(help_text="Check primary key."),
+                "agent_id": serializers.CharField(
+                    help_text="Agent id; required (older agents are rejected)."
+                ),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Returns 'ok'."),
+            400: OpenApiResponse(description="Agent upgrade required."),
+        },
+    )
     def patch(self, request):
         if "agent_id" not in request.data.keys():
             return notify_error("Agent upgrade required")
@@ -328,6 +553,29 @@ class CheckRunnerInterval(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Get the check run interval",
+        description="Internal agent endpoint. Returns the agent pk and the effective "
+        "check run interval in seconds.",
+        parameters=[
+            OpenApiParameter(
+                "agentid",
+                OpenApiTypes.STR,
+                OpenApiParameter.PATH,
+                description="Agent id (the agent is also resolved via its auth token).",
+            )
+        ],
+        responses={
+            200: inline_serializer(
+                name="ApiV3CheckRunnerIntervalResponse",
+                fields={
+                    "agent": serializers.IntegerField(help_text="Agent primary key."),
+                    "check_interval": serializers.IntegerField(),
+                },
+            )
+        },
+    )
     def get(self, request, agentid):
         agent = get_object_or_404(
             Agent.objects.defer(*AGENT_DEFER).prefetch_related("agentchecks"),
@@ -339,10 +587,33 @@ class CheckRunnerInterval(APIView):
         )
 
 
+@extend_schema(
+    tags=["apiv3"],
+    parameters=[
+        OpenApiParameter(
+            "pk",
+            OpenApiTypes.INT,
+            OpenApiParameter.PATH,
+            description="AutomatedTask primary key.",
+        ),
+        OpenApiParameter(
+            "agentid",
+            OpenApiTypes.STR,
+            OpenApiParameter.PATH,
+            description="Agent id (the agent is also resolved via its auth token).",
+        ),
+    ],
+)
 class TaskRunner(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        summary="Get a task definition to run",
+        description="Internal agent endpoint. Returns the automated task definition "
+        "(script, args, etc.) for the agent to execute.",
+        responses={200: TaskGOGetSerializer},
+    )
     def get(self, request, pk, agentid):
         agent = get_object_or_404(
             Agent.objects.select_related("policy", "site").defer(*AGENT_DEFER),
@@ -361,6 +632,16 @@ class TaskRunner(APIView):
 
         return Response(TaskGOGetSerializer(task, context={"agent": agent}).data)
 
+    @extend_schema(
+        summary="Submit a task run result",
+        description="Internal agent endpoint. The agent submits the result of an "
+        "automated task run (stdout/stderr/retcode/etc.). Persists the TaskResult, "
+        "records agent history, updates collector custom fields, and handles alerts.",
+        request=TaskResultSerializer,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Returns 'ok'.")
+        },
+    )
     def patch(self, request, pk, agentid):
         from alerts.models import Alert
 
@@ -428,6 +709,30 @@ class TaskRunner(APIView):
 class MeshExe(APIView):
     """Sends the mesh exe to the installer"""
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Download the MeshCentral agent",
+        description="Internal agent endpoint. Used by the installer to download the "
+        "appropriate MeshCentral agent binary for the requested architecture and "
+        "platform.",
+        request=inline_serializer(
+            name="ApiV3MeshExeRequest",
+            fields={
+                "goarch": serializers.CharField(
+                    help_text="Target architecture, e.g. amd64, 386, arm64."
+                ),
+                "plat": serializers.CharField(
+                    help_text="Target platform, e.g. windows, darwin."
+                ),
+            },
+        ),
+        responses={
+            (200, "application/octet-stream"): OpenApiTypes.BINARY,
+            400: OpenApiResponse(
+                description="Unsupported arch or unable to reach mesh."
+            ),
+        },
+    )
     def post(self, request):
         match request.data:
             case {"goarch": GoArch.AMD64, "plat": AgentPlat.WINDOWS}:
@@ -469,6 +774,27 @@ class MeshReinstall(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Download MeshCentral reinstall installer",
+        description="Internal agent endpoint. Streams a MeshCentral agent installer "
+        "for reinstalling the mesh agent on this agent (Windows only for now).",
+        parameters=[
+            OpenApiParameter(
+                "agentid",
+                OpenApiTypes.STR,
+                OpenApiParameter.PATH,
+                description="Agent id (the agent is also resolved via its auth token).",
+            )
+        ],
+        request=None,
+        responses={
+            (200, "application/octet-stream"): OpenApiTypes.BINARY,
+            400: OpenApiResponse(
+                description="Unable to reach mesh or build the installer."
+            ),
+        },
+    )
     def get(self, request, agentid):
 
         agent = get_object_or_404(
@@ -511,6 +837,38 @@ class MeshReinstall(APIView):
 
 
 class NewAgent(APIView):
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Register a new agent",
+        description="Internal agent endpoint. Called during agent installation to "
+        "create the Agent record, its service user/auth token, and a default Windows "
+        "update policy. Returns the new agent pk and auth token.",
+        request=inline_serializer(
+            name="ApiV3NewAgentRequest",
+            fields={
+                "agent_id": serializers.CharField(),
+                "hostname": serializers.CharField(),
+                "site": serializers.IntegerField(help_text="Site primary key."),
+                "monitoring_type": serializers.ChoiceField(
+                    choices=["server", "workstation"]
+                ),
+                "description": serializers.CharField(),
+                "mesh_node_id": serializers.CharField(),
+                "goarch": serializers.CharField(help_text="Architecture, e.g. amd64."),
+                "plat": serializers.CharField(help_text="Platform, e.g. windows."),
+            },
+        ),
+        responses={
+            200: inline_serializer(
+                name="ApiV3NewAgentResponse",
+                fields={
+                    "pk": serializers.IntegerField(help_text="New agent primary key."),
+                    "token": serializers.CharField(help_text="Agent auth token."),
+                },
+            ),
+            400: OpenApiResponse(description="Agent already exists."),
+        },
+    )
     def post(self, request):
         from logs.models import AuditLog
 
@@ -573,6 +931,25 @@ class Software(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Submit installed software inventory",
+        description="Internal agent endpoint. The agent submits its installed "
+        "software list, which is stored/updated on the agent's InstalledSoftware "
+        "record.",
+        request=inline_serializer(
+            name="ApiV3SoftwareRequest",
+            fields={
+                "software": serializers.ListField(
+                    child=serializers.DictField(),
+                    help_text="List of installed software entries.",
+                ),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Returns 'ok'.")
+        },
+    )
     def post(self, request):
         agent = get_object_or_404(Agent, user=request.user)
         sw = request.data["software"]
@@ -587,10 +964,37 @@ class Software(APIView):
 
 
 class Installer(APIView):
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Validate installer token",
+        description="Internal agent endpoint. Used by the installer to verify its "
+        "auth token is valid; returns 401 if not.",
+        request=None,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Returns 'ok'."),
+            401: OpenApiResponse(description="Invalid token."),
+        },
+    )
     def get(self, request):
         # used to check if token is valid. will return 401 if not
         return Response("ok")
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Validate installer version",
+        description="Internal agent endpoint. Checks the supplied installer version "
+        "against the latest supported agent version and rejects outdated installers.",
+        request=inline_serializer(
+            name="ApiV3InstallerVersionRequest",
+            fields={
+                "version": serializers.CharField(help_text="Installer/agent version."),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Returns 'ok'."),
+            400: OpenApiResponse(description="Invalid data or outdated installer."),
+        },
+    )
     def post(self, request):
         if "version" not in request.data:
             return notify_error("Invalid data")
@@ -611,6 +1015,31 @@ class AgentHistoryResult(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Submit script run history result",
+        description="Internal agent endpoint. The agent submits the result of a "
+        "script run associated with an AgentHistory record. Updates collector custom "
+        "fields and optionally saves an agent note.",
+        parameters=[
+            OpenApiParameter(
+                "agentid",
+                OpenApiTypes.STR,
+                OpenApiParameter.PATH,
+                description="Agent id (the agent is also resolved via its auth token).",
+            ),
+            OpenApiParameter(
+                "pk",
+                OpenApiTypes.INT,
+                OpenApiParameter.PATH,
+                description="AgentHistory primary key.",
+            ),
+        ],
+        request=AgentHistorySerializer,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Returns 'ok'.")
+        },
+    )
     def patch(self, request, agentid, pk):
         content_length = request.META.get("CONTENT_LENGTH")
         if content_length and int(content_length) > TRMM_MAX_REQUEST_SIZE:
@@ -662,6 +1091,25 @@ class AgentConfig(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["apiv3"],
+        summary="Get agent configuration",
+        description="Internal agent endpoint. Returns the agent configuration object "
+        "(server-side settings the agent applies locally).",
+        parameters=[
+            OpenApiParameter(
+                "agentid",
+                OpenApiTypes.STR,
+                OpenApiParameter.PATH,
+                description="Agent id (the agent is also resolved via its auth token).",
+            )
+        ],
+        responses={
+            200: OpenApiResponse(
+                OpenApiTypes.OBJECT, description="Agent configuration key/value object."
+            )
+        },
+    )
     def get(self, request, agentid):
         ret = get_agent_config()
         return Response(ret._to_dict())

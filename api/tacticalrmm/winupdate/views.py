@@ -1,6 +1,12 @@
 import asyncio
 
 from django.shortcuts import get_object_or_404
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+)
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -19,6 +25,21 @@ from .serializers import WinUpdateSerializer
 class GetWindowsUpdates(APIView):
     permission_classes = [IsAuthenticated, AgentWinUpdatePerms]
 
+    @extend_schema(
+        tags=["winupdate"],
+        summary="List Windows updates on an agent",
+        description="Returns all Windows updates known for the specified agent, "
+        "ordered most recent first.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id",
+                OpenApiTypes.STR,
+                OpenApiParameter.PATH,
+                description="Agent identifier (agent_id).",
+            )
+        ],
+        responses=WinUpdateSerializer(many=True),
+    )
     # list windows updates on agent
     def get(self, request, agent_id):
         agent = get_object_or_404(Agent, agent_id=agent_id)
@@ -31,6 +52,26 @@ class GetWindowsUpdates(APIView):
 class ScanWindowsUpdates(APIView):
     permission_classes = [IsAuthenticated, AgentWinUpdatePerms]
 
+    @extend_schema(
+        tags=["winupdate"],
+        summary="Trigger a Windows update scan on an agent",
+        description="Queues a Windows update scan on the agent. Not available for "
+        "POSIX (non-Windows) agents.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id",
+                OpenApiTypes.STR,
+                OpenApiParameter.PATH,
+                description="Agent identifier (agent_id).",
+            )
+        ],
+        request=None,
+        responses={
+            200: OpenApiResponse(
+                OpenApiTypes.STR, description="Confirmation message"
+            )
+        },
+    )
     # scan for windows updates on agent
     def post(self, request, agent_id):
         agent = get_object_or_404(Agent, agent_id=agent_id)
@@ -45,6 +86,26 @@ class ScanWindowsUpdates(APIView):
 class InstallWindowsUpdates(APIView):
     permission_classes = [IsAuthenticated, AgentWinUpdatePerms]
 
+    @extend_schema(
+        tags=["winupdate"],
+        summary="Install approved Windows updates on an agent",
+        description="Approves pending updates per policy and queues installation of "
+        "all approved patches on the agent.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id",
+                OpenApiTypes.STR,
+                OpenApiParameter.PATH,
+                description="Agent identifier (agent_id).",
+            )
+        ],
+        request=None,
+        responses={
+            200: OpenApiResponse(
+                OpenApiTypes.STR, description="Confirmation message"
+            )
+        },
+    )
     # install approved windows updates on agent
     def post(self, request, agent_id):
         agent = get_object_or_404(Agent, agent_id=agent_id)
@@ -61,6 +122,26 @@ class InstallWindowsUpdates(APIView):
 class EditWindowsUpdates(APIView):
     permission_classes = [IsAuthenticated, AgentWinUpdatePerms]
 
+    @extend_schema(
+        tags=["winupdate"],
+        summary="Change the approval status of a Windows update",
+        description="Updates a single Windows update record, typically to change its "
+        "approval `action`.",
+        parameters=[
+            OpenApiParameter(
+                "pk",
+                OpenApiTypes.INT,
+                OpenApiParameter.PATH,
+                description="WinUpdate primary key.",
+            )
+        ],
+        request=WinUpdateSerializer,
+        responses={
+            200: OpenApiResponse(
+                OpenApiTypes.STR, description="Confirmation message"
+            )
+        },
+    )
     # change approval status of update
     def put(self, request, pk):
         update = get_object_or_404(WinUpdate, pk=pk)

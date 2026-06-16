@@ -1,5 +1,7 @@
 import pyotp
 from django.conf import settings
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from rest_framework.serializers import (
     ModelSerializer,
     ReadOnlyField,
@@ -62,6 +64,7 @@ class TOTPSetupSerializer(ModelSerializer):
             "qr_url",
         )
 
+    @extend_schema_field(OpenApiTypes.STR)
     def get_qr_url(self, obj):
         return pyotp.totp.TOTP(obj.totp_key).provisioning_uri(
             obj.username, issuer_name=get_webdomain(settings.CORS_ORIGIN_WHITELIST[0])
@@ -75,6 +78,7 @@ class RoleSerializer(ModelSerializer):
         model = Role
         fields = "__all__"
 
+    @extend_schema_field(OpenApiTypes.INT)
     def get_user_count(self, obj):
         return obj.users.count()
 

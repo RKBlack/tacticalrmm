@@ -12,6 +12,14 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone as djangotime
 from django.views.decorators.csrf import csrf_exempt
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    inline_serializer,
+)
 from redis import from_url
 from rest_framework import serializers
 from rest_framework import status as drf_status
@@ -73,10 +81,24 @@ from .serializers import (
 class GetEditCoreSettings(APIView):
     permission_classes = [IsAuthenticated, CoreSettingsPerms]
 
+    @extend_schema(
+        tags=["core"],
+        summary="Get global core settings",
+        description="Returns the single global CoreSettings object for the instance.",
+        responses=CoreSettingsSerializer,
+    )
     def get(self, request):
         settings = CoreSettings.objects.first()
         return Response(CoreSettingsSerializer(settings).data)
 
+    @extend_schema(
+        tags=["core"],
+        summary="Update global core settings",
+        description="Partially updates the global CoreSettings object. On HOSTED "
+        "instances some MeshCentral and server-script fields are forced/ignored.",
+        request=CoreSettingsSerializer,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def put(self, request):
         data = request.data.copy()
 
@@ -99,17 +121,37 @@ class GetEditCoreSettings(APIView):
         return Response("ok")
 
 
+@extend_schema(
+    tags=["core"],
+    summary="Health check / home",
+    description="Public endpoint returning a simple status payload.",
+    responses=inline_serializer(
+        name="CoreHomeResponse",
+        fields={"status": serializers.CharField()},
+    ),
+)
 @api_view()
 @permission_classes([AllowAny])
 def home(request):
     return Response({"status": "ok"})
 
 
+@extend_schema(
+    tags=["core"],
+    summary="Get application version",
+    responses={200: OpenApiResponse(OpenApiTypes.STR, description="Application version string")},
+)
 @api_view()
 def version(request):
     return Response(settings.APP_VER)
 
 
+@extend_schema(
+    tags=["core"],
+    summary="Clear the cache",
+    description="Clears the entire server cache.",
+    responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+)
 @api_view()
 @permission_classes([IsAuthenticated, ServerMaintPerms])
 def clear_cache(request):
@@ -119,6 +161,42 @@ def clear_cache(request):
     return Response("Cache was cleared!")
 
 
+@extend_schema(
+    tags=["core"],
+    summary="Get dashboard info",
+    description="Returns instance/version metadata together with the requesting "
+    "user's dashboard preferences and feature-enablement flags.",
+    responses=inline_serializer(
+        name="CoreDashboardInfoResponse",
+        fields={
+            "trmm_version": serializers.CharField(),
+            "latest_trmm_ver": serializers.CharField(),
+            "dark_mode": serializers.BooleanField(),
+            "show_community_scripts": serializers.BooleanField(),
+            "dbl_click_action": serializers.CharField(),
+            "default_agent_tbl_tab": serializers.CharField(),
+            "url_action": serializers.IntegerField(allow_null=True),
+            "client_tree_sort": serializers.CharField(),
+            "client_tree_splitter": serializers.IntegerField(),
+            "loading_bar_color": serializers.CharField(),
+            "clear_search_when_switching": serializers.BooleanField(),
+            "hosted": serializers.BooleanField(),
+            "date_format": serializers.CharField(),
+            "default_date_format": serializers.CharField(),
+            "token_is_expired": serializers.BooleanField(),
+            "open_ai_integration_enabled": serializers.BooleanField(),
+            "dash_info_color": serializers.CharField(),
+            "dash_positive_color": serializers.CharField(),
+            "dash_negative_color": serializers.CharField(),
+            "dash_warning_color": serializers.CharField(),
+            "run_cmd_placeholder_text": serializers.CharField(),
+            "server_scripts_enabled": serializers.BooleanField(),
+            "web_terminal_enabled": serializers.BooleanField(),
+            "block_local_user_logon": serializers.BooleanField(),
+            "sso_enabled": serializers.BooleanField(),
+        },
+    ),
+)
 @api_view()
 def dashboard_info(request):
     if request.user.is_installer_user:
@@ -161,6 +239,13 @@ def dashboard_info(request):
     )
 
 
+@extend_schema(
+    tags=["core"],
+    summary="Send a test email",
+    description="Sends a test email using the configured SMTP settings.",
+    request=None,
+    responses={200: OpenApiResponse(OpenApiTypes.STR, description="Result message")},
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, CoreSettingsPerms])
 def email_test(request):
@@ -175,6 +260,34 @@ def email_test(request):
     return Response(msg)
 
 
+@extend_schema(
+    tags=["core"],
+    summary="Run a server maintenance action",
+    description="Performs a server maintenance action. Supported actions: "
+    "`reload_nats`, `rm_orphaned_tasks`, `prune_db` (requires `prune_tables`).",
+    request=inline_serializer(
+        name="CoreServerMaintenanceRequest",
+        fields={
+            "action": serializers.ChoiceField(
+                choices=["reload_nats", "rm_orphaned_tasks", "prune_db"]
+            ),
+            "prune_tables": serializers.ListField(
+                child=serializers.ChoiceField(
+                    choices=["audit_logs", "pending_actions", "alerts"]
+                ),
+                required=False,
+            ),
+        },
+    ),
+    responses={200: OpenApiResponse(OpenApiTypes.STR, description="Result message")},
+    examples=[
+        OpenApiExample(
+            "Prune database tables",
+            value={"action": "prune_db", "prune_tables": ["audit_logs", "alerts"]},
+            request_only=True,
+        )
+    ],
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, ServerMaintPerms])
 def server_maintenance(request):
@@ -226,6 +339,19 @@ def server_maintenance(request):
 class GetAddCustomFields(APIView):
     permission_classes = [IsAuthenticated, CustomFieldPerms]
 
+    @extend_schema(
+        tags=["core"],
+        summary="List custom fields",
+        description="Lists all custom fields, optionally filtered by model.",
+        parameters=[
+            OpenApiParameter(
+                "model", OpenApiTypes.STR, OpenApiParameter.QUERY,
+                required=False,
+                description="Filter custom fields by model name.",
+            )
+        ],
+        responses=CustomFieldSerializer(many=True),
+    )
     def get(self, request):
         if "model" in request.query_params.keys():
             fields = CustomField.objects.filter(model=request.query_params["model"])
@@ -233,6 +359,16 @@ class GetAddCustomFields(APIView):
             fields = CustomField.objects.all()
         return Response(CustomFieldSerializer(fields, many=True).data)
 
+    @extend_schema(
+        tags=["core"],
+        summary="List custom fields for a model",
+        description="Returns custom fields filtered by the supplied model name.",
+        request=inline_serializer(
+            name="CoreGetCustomFieldsByModelRequest",
+            fields={"model": serializers.CharField()},
+        ),
+        responses=CustomFieldSerializer(many=True),
+    )
     def patch(self, request):
         if "model" in request.data.keys():
             fields = CustomField.objects.filter(model=request.data["model"])
@@ -240,6 +376,12 @@ class GetAddCustomFields(APIView):
 
         return notify_error("The request was invalid")
 
+    @extend_schema(
+        tags=["core"],
+        summary="Add a custom field",
+        request=CustomFieldSerializer,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def post(self, request):
         serializer = CustomFieldSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -248,14 +390,30 @@ class GetAddCustomFields(APIView):
         return Response("ok")
 
 
+@extend_schema(
+    tags=["core"],
+    parameters=[
+        OpenApiParameter("pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+                         description="Custom field primary key.")
+    ],
+)
 class GetUpdateDeleteCustomFields(APIView):
     permission_classes = [IsAuthenticated, CustomFieldPerms]
 
+    @extend_schema(
+        summary="Get a single custom field",
+        responses=CustomFieldSerializer,
+    )
     def get(self, request, pk):
         custom_field = get_object_or_404(CustomField, pk=pk)
 
         return Response(CustomFieldSerializer(custom_field).data)
 
+    @extend_schema(
+        summary="Update a custom field",
+        request=CustomFieldSerializer,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def put(self, request, pk):
         custom_field = get_object_or_404(CustomField, pk=pk)
 
@@ -267,6 +425,10 @@ class GetUpdateDeleteCustomFields(APIView):
 
         return Response("ok")
 
+    @extend_schema(
+        summary="Delete a custom field",
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def delete(self, request, pk):
         get_object_or_404(CustomField, pk=pk).delete()
 
@@ -276,10 +438,26 @@ class GetUpdateDeleteCustomFields(APIView):
 class CodeSign(APIView):
     permission_classes = [IsAuthenticated, CodeSignPerms]
 
+    @extend_schema(
+        tags=["core"],
+        summary="Get the code signing token",
+        responses=CodeSignTokenSerializer,
+    )
     def get(self, request):
         token = CodeSignToken.objects.first()
         return Response(CodeSignTokenSerializer(token).data)
 
+    @extend_schema(
+        tags=["core"],
+        summary="Save the code signing token",
+        description="Validates the supplied token against the upstream service and "
+        "stores it if valid.",
+        request=inline_serializer(
+            name="CoreCodeSignSaveRequest",
+            fields={"token": serializers.CharField()},
+        ),
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Result message")},
+    )
     def patch(self, request):
         import requests
 
@@ -314,6 +492,12 @@ class CodeSign(APIView):
             ret = "Something went wrong"
         return notify_error(ret)
 
+    @extend_schema(
+        tags=["core"],
+        summary="Trigger code signing of all agents",
+        request=None,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def post(self, request):
         from agents.models import Agent
         from agents.tasks import send_agent_update_task
@@ -328,6 +512,11 @@ class CodeSign(APIView):
         send_agent_update_task.delay(agent_ids=agent_ids, token=token, force=True)
         return Response("Agents will be code signed shortly")
 
+    @extend_schema(
+        tags=["core"],
+        summary="Delete the code signing token",
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def delete(self, request):
         CodeSignToken.objects.all().delete()
         return Response("ok")
@@ -336,10 +525,21 @@ class CodeSign(APIView):
 class GetAddKeyStore(APIView):
     permission_classes = [IsAuthenticated, GlobalKeyStorePerms]
 
+    @extend_schema(
+        tags=["core"],
+        summary="List global key store entries",
+        responses=KeyStoreSerializer(many=True),
+    )
     def get(self, request):
         keys = GlobalKVStore.objects.all()
         return Response(KeyStoreSerializer(keys, many=True).data)
 
+    @extend_schema(
+        tags=["core"],
+        summary="Add a global key store entry",
+        request=KeyStoreSerializer,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def post(self, request):
         serializer = KeyStoreSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -348,9 +548,21 @@ class GetAddKeyStore(APIView):
         return Response("ok")
 
 
+@extend_schema(
+    tags=["core"],
+    parameters=[
+        OpenApiParameter("pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+                         description="Key store entry primary key.")
+    ],
+)
 class UpdateDeleteKeyStore(APIView):
     permission_classes = [IsAuthenticated, GlobalKeyStorePerms]
 
+    @extend_schema(
+        summary="Update a global key store entry",
+        request=KeyStoreSerializer,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def put(self, request, pk):
         key = get_object_or_404(GlobalKVStore, pk=pk)
 
@@ -360,6 +572,10 @@ class UpdateDeleteKeyStore(APIView):
 
         return Response("ok")
 
+    @extend_schema(
+        summary="Delete a global key store entry",
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def delete(self, request, pk):
         get_object_or_404(GlobalKVStore, pk=pk).delete()
 
@@ -369,10 +585,21 @@ class UpdateDeleteKeyStore(APIView):
 class GetAddURLAction(APIView):
     permission_classes = [IsAuthenticated, URLActionPerms]
 
+    @extend_schema(
+        tags=["core"],
+        summary="List URL actions",
+        responses=URLActionSerializer(many=True),
+    )
     def get(self, request):
         actions = URLAction.objects.all()
         return Response(URLActionSerializer(actions, many=True).data)
 
+    @extend_schema(
+        tags=["core"],
+        summary="Add a URL action",
+        request=URLActionSerializer,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def post(self, request):
         serializer = URLActionSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -381,9 +608,21 @@ class GetAddURLAction(APIView):
         return Response("ok")
 
 
+@extend_schema(
+    tags=["core"],
+    parameters=[
+        OpenApiParameter("pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+                         description="URL action primary key.")
+    ],
+)
 class UpdateDeleteURLAction(APIView):
     permission_classes = [IsAuthenticated, CoreSettingsPerms]
 
+    @extend_schema(
+        summary="Update a URL action",
+        request=URLActionSerializer,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def put(self, request, pk):
         action = get_object_or_404(URLAction, pk=pk)
 
@@ -395,6 +634,10 @@ class UpdateDeleteURLAction(APIView):
 
         return Response("ok")
 
+    @extend_schema(
+        summary="Delete a URL action",
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+    )
     def delete(self, request, pk):
         get_object_or_404(URLAction, pk=pk).delete()
 
@@ -404,6 +647,23 @@ class UpdateDeleteURLAction(APIView):
 class RunURLAction(APIView):
     permission_classes = [IsAuthenticated, URLActionPerms]
 
+    @extend_schema(
+        tags=["core"],
+        summary="Run a URL action",
+        description="Resolves a URL action's pattern against an agent, site or "
+        "client instance and returns the final URL. Exactly one of `agent_id`, "
+        "`site` or `client` must be supplied along with `action`.",
+        request=inline_serializer(
+            name="CoreRunURLActionRequest",
+            fields={
+                "action": serializers.IntegerField(help_text="URL action id."),
+                "agent_id": serializers.CharField(required=False),
+                "site": serializers.IntegerField(required=False),
+                "client": serializers.IntegerField(required=False),
+            },
+        ),
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="The resolved URL")},
+    )
     def patch(self, request):
         from requests.utils import requote_uri
 
@@ -463,6 +723,21 @@ class RunTestURLAction(APIView):
         )
         run_instance_id = serializers.CharField(allow_null=True)
 
+    @extend_schema(
+        tags=["core"],
+        summary="Test a URL/REST action",
+        description="Executes a URL action pattern as a test REST request and returns "
+        "the resolved URL, the response result and the resolved body.",
+        request=InputSerializer,
+        responses=inline_serializer(
+            name="CoreRunTestURLActionResponse",
+            fields={
+                "url": serializers.CharField(),
+                "result": serializers.CharField(),
+                "body": serializers.CharField(),
+            },
+        ),
+    )
     def post(self, request):
         serializer = self.InputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -512,10 +787,21 @@ class RunTestURLAction(APIView):
 class GetAddSchedule(APIView):
     permission_classes = [IsAuthenticated, SchedulePerms]
 
+    @extend_schema(
+        tags=["core"],
+        summary="List schedules",
+        responses=ScheduleSerializer(many=True),
+    )
     def get(self, request):
         schedules = Schedule.objects.all()
         return Response(ScheduleSerializer(schedules, many=True).data)
 
+    @extend_schema(
+        tags=["core"],
+        summary="Add a schedule",
+        request=ScheduleSerializer,
+        responses=ScheduleSerializer,
+    )
     def post(self, request):
         serializer = ScheduleSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -524,9 +810,21 @@ class GetAddSchedule(APIView):
         return Response(serializer.data)
 
 
+@extend_schema(
+    tags=["core"],
+    parameters=[
+        OpenApiParameter("pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+                         description="Schedule primary key.")
+    ],
+)
 class UpdateDeleteSchedule(APIView):
     permission_classes = [IsAuthenticated, SchedulePerms]
 
+    @extend_schema(
+        summary="Update a schedule",
+        request=ScheduleSerializer,
+        responses=ScheduleSerializer,
+    )
     def put(self, request, pk):
         schedule = get_object_or_404(Schedule, pk=pk)
 
@@ -538,6 +836,11 @@ class UpdateDeleteSchedule(APIView):
 
         return Response(serializer.data)
 
+    @extend_schema(
+        summary="Delete a schedule",
+        description="Deletes a schedule. Returns an error if the schedule is in use.",
+        responses={200: OpenApiResponse(OpenApiTypes.INT, description="Deleted schedule primary key")},
+    )
     def delete(self, request, pk):
         schedule = get_object_or_404(Schedule, pk=pk)
 
@@ -552,6 +855,31 @@ class UpdateDeleteSchedule(APIView):
 class TestRunServerScript(APIView):
     permission_classes = [IsAuthenticated, RunServerScriptPerms]
 
+    @extend_schema(
+        tags=["core"],
+        summary="Test run a server script",
+        description="Runs the supplied script body on the server and returns stdout, "
+        "stderr, execution time and return code. Requires server scripts to be enabled.",
+        request=inline_serializer(
+            name="CoreTestRunServerScriptRequest",
+            fields={
+                "code": serializers.CharField(help_text="Script body, must start with a shebang."),
+                "args": serializers.ListField(child=serializers.CharField()),
+                "env_vars": serializers.ListField(child=serializers.CharField()),
+                "timeout": serializers.IntegerField(),
+                "shell": serializers.CharField(),
+            },
+        ),
+        responses=inline_serializer(
+            name="CoreTestRunServerScriptResponse",
+            fields={
+                "stdout": serializers.CharField(),
+                "stderr": serializers.CharField(),
+                "execution_time": serializers.CharField(),
+                "retcode": serializers.IntegerField(),
+            },
+        ),
+    )
     def post(self, request):
         core: CoreSettings = CoreSettings.objects.first()  # type: ignore
         if not core.server_scripts_enabled:
@@ -597,6 +925,17 @@ class TestRunServerScript(APIView):
         return Response(ret)
 
 
+@extend_schema(
+    tags=["core"],
+    summary="Check web terminal permissions",
+    description="Returns ok if the web terminal feature is enabled, otherwise a "
+    "412 with a notification message. Actual permissions are enforced in the consumer.",
+    request=None,
+    responses={
+        200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message"),
+        412: OpenApiResponse(OpenApiTypes.STR, description="Feature is disabled"),
+    },
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, WebTerminalPerms])
 def webterm_perms(request):
@@ -613,6 +952,13 @@ def webterm_perms(request):
 class TwilioSMSTest(APIView):
     permission_classes = [IsAuthenticated, CoreSettingsPerms]
 
+    @extend_schema(
+        tags=["core"],
+        summary="Send a test SMS",
+        description="Sends a test SMS using the configured Twilio settings.",
+        request=None,
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Result message")},
+    )
     def post(self, request):
         core = get_core_settings()
         if not core.sms_is_configured:
@@ -627,6 +973,34 @@ class TwilioSMSTest(APIView):
         return Response(msg)
 
 
+@extend_schema(
+    tags=["core"],
+    summary="Server status (v2)",
+    description="Monitoring endpoint returning instance health: version, counts, "
+    "resource usage, certificate expiry, dependency pings and service states.",
+    request=None,
+    responses=inline_serializer(
+        name="CoreStatusV2Response",
+        fields={
+            "version": serializers.CharField(),
+            "latest_agent_version": serializers.CharField(),
+            "agent_count": serializers.IntegerField(),
+            "client_count": serializers.IntegerField(),
+            "site_count": serializers.IntegerField(),
+            "disk_usage_percent": serializers.IntegerField(),
+            "mem_usage_percent": serializers.IntegerField(),
+            "days_until_cert_expires": serializers.IntegerField(),
+            "cert_expired": serializers.BooleanField(),
+            "redis_ping": serializers.BooleanField(),
+            "celery_queue_len": serializers.IntegerField(),
+            "celery_queue_health": serializers.CharField(),
+            "nats_std_ping": serializers.BooleanField(),
+            "nats_ws_ping": serializers.BooleanField(),
+            "mesh_ping": serializers.BooleanField(),
+            "services_running": serializers.DictField(child=serializers.BooleanField()),
+        },
+    ),
+)
 @csrf_exempt
 @monitoring_view_v2
 def status_v2(request):
@@ -693,6 +1067,29 @@ def status_v2(request):
 
 
 # TODO deprecated
+@extend_schema(
+    tags=["core"],
+    summary="Server status (deprecated)",
+    description="Deprecated monitoring endpoint. Returns instance health: version, "
+    "counts, resource usage, certificate expiry and service states. Use v2/status/ instead.",
+    request=None,
+    responses=inline_serializer(
+        name="CoreStatusResponse",
+        fields={
+            "version": serializers.CharField(),
+            "latest_agent_version": serializers.CharField(),
+            "agent_count": serializers.IntegerField(),
+            "client_count": serializers.IntegerField(),
+            "site_count": serializers.IntegerField(),
+            "disk_usage_percent": serializers.IntegerField(),
+            "mem_usage_percent": serializers.IntegerField(),
+            "days_until_cert_expires": serializers.IntegerField(),
+            "cert_expired": serializers.BooleanField(),
+            "redis_ping": serializers.BooleanField(),
+            "services_running": serializers.DictField(),
+        },
+    ),
+)
 @csrf_exempt
 @monitoring_view
 def status(request):
@@ -750,6 +1147,17 @@ def status(request):
 class OpenAICodeCompletion(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["core"],
+        summary="Generate a code completion via OpenAI",
+        description="Sends the supplied prompt to the configured OpenAI model and "
+        "returns the generated completion text.",
+        request=inline_serializer(
+            name="CoreOpenAICodeCompletionRequest",
+            fields={"prompt": serializers.CharField()},
+        ),
+        responses={200: OpenApiResponse(OpenApiTypes.STR, description="Generated completion text")},
+    )
     def post(self, request: Request) -> Response:
         settings = get_core_settings()
 

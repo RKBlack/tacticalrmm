@@ -1,3 +1,5 @@
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from .models import WinUpdate, WinUpdatePolicy
@@ -6,6 +8,7 @@ from .models import WinUpdate, WinUpdatePolicy
 class WinUpdateSerializer(serializers.ModelSerializer):
     date_installed = serializers.SerializerMethodField()
 
+    @extend_schema_field(OpenApiTypes.STR)
     def get_date_installed(self, obj):
         if obj.date_installed is not None:
             return obj.date_installed.astimezone(self.context["default_tz"]).strftime(

@@ -67,7 +67,11 @@ if getattr(settings, "DEBUG", False) and not getattr(settings, "DEMO", False):
     urlpatterns += [path("silk/", include("silk.urls", namespace="silk"))]
 
 if getattr(settings, "SWAGGER_ENABLED", False):
-    from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+    from drf_spectacular.views import (
+        SpectacularAPIView,
+        SpectacularRedocView,
+        SpectacularSwaggerView,
+    )
 
     urlpatterns += (
         path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
@@ -75,6 +79,11 @@ if getattr(settings, "SWAGGER_ENABLED", False):
             "api/schema/swagger-ui/",
             SpectacularSwaggerView.as_view(url_name="schema"),
             name="swagger-ui",
+        ),
+        path(
+            "api/schema/redoc/",
+            SpectacularRedocView.as_view(url_name="schema"),
+            name="redoc",
         ),
     )
 

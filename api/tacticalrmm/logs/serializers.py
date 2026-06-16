@@ -1,3 +1,5 @@
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from .models import AuditLog, DebugLog, PendingAction
@@ -5,9 +7,10 @@ from .models import AuditLog, DebugLog, PendingAction
 
 class AuditLogSerializer(serializers.ModelSerializer):
     entry_time = serializers.ReadOnlyField()
-    ip_address = serializers.ReadOnlyField(source="debug_info.ip")
+    ip_address = serializers.CharField(source="debug_info.ip", read_only=True)
     site = serializers.SerializerMethodField()
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_site(self, obj):
         from agents.models import Agent
         from clients.serializers import SiteMinimumSerializer
@@ -26,7 +29,7 @@ class AuditLogSerializer(serializers.ModelSerializer):
 
 class PendingActionSerializer(serializers.ModelSerializer):
     hostname = serializers.ReadOnlyField(source="agent.hostname")
-    client = serializers.ReadOnlyField(source="agent.client.name")
+    client = serializers.CharField(source="agent.client.name", read_only=True)
     site = serializers.ReadOnlyField(source="agent.site.name")
     due = serializers.ReadOnlyField()
     description = serializers.ReadOnlyField()

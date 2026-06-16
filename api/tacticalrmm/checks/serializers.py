@@ -1,4 +1,6 @@
 import validators as _v
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from autotasks.models import AutomatedTask
@@ -22,11 +24,12 @@ class CheckResultSerializer(serializers.ModelSerializer):
 
 
 class CheckSerializer(serializers.ModelSerializer):
-    readable_desc = serializers.ReadOnlyField()
+    readable_desc = serializers.CharField(read_only=True)
     assignedtasks = AssignedTaskField(many=True, read_only=True)
     alert_template = serializers.SerializerMethodField()
     check_result = serializers.SerializerMethodField()
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_check_result(self, obj):
         return (
             CheckResultSerializer(obj.check_result).data
@@ -34,6 +37,7 @@ class CheckSerializer(serializers.ModelSerializer):
             else {}
         )
 
+    @extend_schema_field(OpenApiTypes.OBJECT)
     def get_alert_template(self, obj):
         if obj.agent:
             alert_template = obj.agent.alert_template
@@ -159,6 +163,7 @@ class CheckRunnerGetSerializer(serializers.ModelSerializer):
     script_args = serializers.SerializerMethodField()
     env_vars = serializers.SerializerMethodField()
 
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_script_args(self, obj):
         if obj.check_type != CheckType.SCRIPT:
             return []
@@ -168,6 +173,7 @@ class CheckRunnerGetSerializer(serializers.ModelSerializer):
             agent=agent, shell=obj.script.shell, args=obj.script_args
         )
 
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_env_vars(self, obj):
         if obj.check_type != CheckType.SCRIPT:
             return []

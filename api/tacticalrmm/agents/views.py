@@ -12,6 +12,14 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone as djangotime
 from django.utils.dateparse import parse_datetime
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    inline_serializer,
+)
 from meshctrl.utils import get_login_token
 from packaging import version as pyver
 from rest_framework import serializers
@@ -101,6 +109,39 @@ from .utils import get_validated_agent, send_nats_command
 class GetAgents(APIView):
     permission_classes = [IsAuthenticated, AgentPerms]
 
+    @extend_schema(
+        tags=["agents"],
+        summary="List agents",
+        description="Returns the agents the authenticated user can view. When "
+        "`detail=true` (the default) a full table-style payload is returned; when "
+        "`detail=false` a slim hostname/client/site payload is returned. Optionally "
+        "filtered by monitoring type, client or site.",
+        parameters=[
+            OpenApiParameter(
+                "detail", OpenApiTypes.STR, OpenApiParameter.QUERY, required=False,
+                description="'true' (default) for full detail, 'false' for slim payload.",
+            ),
+            OpenApiParameter(
+                "monitoring_type", OpenApiTypes.STR, OpenApiParameter.QUERY,
+                required=False, description="Filter by monitoring type (server/workstation).",
+            ),
+            OpenApiParameter(
+                "client", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False,
+                description="Filter by client id.",
+            ),
+            OpenApiParameter(
+                "site", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False,
+                description="Filter by site id.",
+            ),
+        ],
+        responses={
+            200: OpenApiResponse(
+                AgentTableSerializer(many=True),
+                description="Full detail (detail=true) returns AgentTableSerializer; "
+                "detail=false returns AgentHostnameSerializer.",
+            )
+        },
+    )
     def get(self, request):
         monitoring_type_filter = Q()
         client_site_filter = Q()
@@ -173,6 +214,15 @@ class GetAgents(APIView):
         return Response(serializer.data)
 
 
+@extend_schema(
+    tags=["agents"],
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+)
 class GetUpdateDeleteAgent(APIView):
     permission_classes = [IsAuthenticated, AgentPerms]
 
@@ -245,6 +295,12 @@ class GetUpdateDeleteAgent(APIView):
             ]
 
     # get agent details
+    @extend_schema(
+        summary="Get a single agent",
+        description="Returns full details for one agent, including checks, custom "
+        "fields, applied policies and Windows update policy.",
+        responses=AgentSerializer,
+    )
     def get(self, request, agent_id):
         from checks.models import Check, CheckResult
 
@@ -279,6 +335,38 @@ class GetUpdateDeleteAgent(APIView):
         return Response(AgentSerializer(agent).data)
 
     # edit agent
+    @extend_schema(
+        summary="Update an agent",
+        description="Updates editable agent fields. Optionally also updates the "
+        "agent's Windows update policy and custom field values.",
+        request=inline_serializer(
+            name="AgentsUpdateAgentRequest",
+            fields={
+                "maintenance_mode": serializers.BooleanField(required=False),
+                "policy": serializers.IntegerField(required=False, allow_null=True),
+                "block_policy_inheritance": serializers.BooleanField(required=False),
+                "monitoring_type": serializers.CharField(required=False),
+                "description": serializers.CharField(required=False, allow_blank=True),
+                "overdue_email_alert": serializers.BooleanField(required=False),
+                "overdue_text_alert": serializers.BooleanField(required=False),
+                "overdue_dashboard_alert": serializers.BooleanField(required=False),
+                "offline_time": serializers.IntegerField(required=False),
+                "overdue_time": serializers.IntegerField(required=False),
+                "check_interval": serializers.IntegerField(required=False),
+                "time_zone": serializers.CharField(required=False, allow_null=True),
+                "site": serializers.IntegerField(required=False),
+                "default_shell": serializers.CharField(required=False, allow_null=True),
+                "default_shell_custom": serializers.CharField(
+                    required=False, allow_blank=True
+                ),
+                "winupdatepolicy": WinUpdatePolicySerializer(many=True, required=False),
+                "custom_fields": AgentCustomFieldSerializer(many=True, required=False),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def put(self, request, agent_id):
         agent = get_object_or_404(Agent, agent_id=agent_id)
 
@@ -319,6 +407,14 @@ class GetUpdateDeleteAgent(APIView):
         return Response("The agent was updated successfully")
 
     # uninstall agent
+    @extend_schema(
+        summary="Uninstall an agent",
+        description="Sends an uninstall command to the agent and removes it from "
+        "Tactical RMM and MeshCentral.",
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def delete(self, request, agent_id):
         agent = get_object_or_404(Agent, agent_id=agent_id)
 
@@ -345,10 +441,28 @@ class GetUpdateDeleteAgent(APIView):
         return Response(f"{name} will now be uninstalled.")
 
 
+@extend_schema(
+    tags=["agents"],
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+)
 class AgentProcesses(APIView):
     permission_classes = [IsAuthenticated, ManageProcPerms]
 
     # list agent processes
+    @extend_schema(
+        summary="List agent processes",
+        description="Returns the current process list reported by the agent.",
+        responses={
+            200: OpenApiResponse(
+                OpenApiTypes.OBJECT, description="Process list reported by the agent."
+            )
+        },
+    )
     def get(self, request, agent_id):
         if getattr(settings, "DEMO", False):
             from tacticalrmm.demo_views import demo_get_procs
@@ -362,6 +476,19 @@ class AgentProcesses(APIView):
         return Response(r)
 
     # kill agent process
+    @extend_schema(
+        summary="Kill an agent process",
+        description="Terminates the process with the given PID on the agent.",
+        parameters=[
+            OpenApiParameter(
+                "pid", OpenApiTypes.INT, OpenApiParameter.PATH,
+                description="Process id to terminate.",
+            )
+        ],
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def delete(self, request, agent_id, pid):
         agent = get_object_or_404(Agent, agent_id=agent_id)
         r = asyncio.run(
@@ -379,6 +506,30 @@ class AgentProcesses(APIView):
 class WebVNC(APIView):
     permission_classes = [IsAuthenticated, MeshPerms]
 
+    @extend_schema(
+        tags=["agents"],
+        summary="Get a WebVNC connection URL",
+        description="Builds a noVNC URL (via MeshCentral) for a TCP port on the agent.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+                description="Agent identifier (agent_id).",
+            ),
+            OpenApiParameter(
+                "port", OpenApiTypes.STR, OpenApiParameter.PATH,
+                description="TCP port to connect to via VNC.",
+            ),
+        ],
+        responses=inline_serializer(
+            name="AgentsWebVNCResponse",
+            fields={
+                "hostname": serializers.CharField(),
+                "vnc": serializers.CharField(),
+                "client": serializers.CharField(),
+                "site": serializers.CharField(),
+            },
+        ),
+    )
     def get(self, request, agent_id, port):
         from urllib.parse import urlparse
 
@@ -425,10 +576,36 @@ class WebVNC(APIView):
         return Response(ret)
 
 
+@extend_schema(
+    tags=["agents"],
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+)
 class AgentMeshCentral(APIView):
     permission_classes = [IsAuthenticated, MeshPerms]
 
     # get mesh urls
+    @extend_schema(
+        summary="Get MeshCentral URLs for an agent",
+        description="Returns MeshCentral control, terminal and file-manager URLs "
+        "(with a login token) for the agent.",
+        responses=inline_serializer(
+            name="AgentsMeshCentralResponse",
+            fields={
+                "hostname": serializers.CharField(),
+                "control": serializers.CharField(),
+                "terminal": serializers.CharField(),
+                "file": serializers.CharField(),
+                "status": serializers.CharField(),
+                "client": serializers.CharField(),
+                "site": serializers.CharField(),
+            },
+        ),
+    )
     def get(self, request, agent_id):
         agent = get_object_or_404(
             Agent.objects.select_related("site__client").defer(*AGENT_DEFER),
@@ -466,6 +643,14 @@ class AgentMeshCentral(APIView):
         return Response(ret)
 
     # start mesh recovery
+    @extend_schema(
+        summary="Recover the MeshCentral agent",
+        description="Triggers a recovery of the MeshCentral agent on the machine.",
+        request=None,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def post(self, request, agent_id):
         agent = get_object_or_404(Agent, agent_id=agent_id)
         data = {"func": "recover", "payload": {"mode": "mesh"}}
@@ -476,6 +661,19 @@ class AgentMeshCentral(APIView):
         return Response(f"Repaired mesh agent on {agent.hostname}")
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="List agent versions",
+    description="Returns the latest available agent version and the list of agents "
+    "(hostname/client/site) the user can view.",
+    responses=inline_serializer(
+        name="AgentsVersionsResponse",
+        fields={
+            "versions": serializers.ListField(child=serializers.CharField()),
+            "agents": AgentHostnameSerializer(many=True),
+        },
+    ),
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, AgentPerms])
 def get_agent_versions(request):
@@ -492,6 +690,19 @@ def get_agent_versions(request):
     )
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Update agents to latest version",
+    description="Queues an update to the latest agent version for the supplied agents "
+    "that are running an older version.",
+    request=inline_serializer(
+        name="AgentsUpdateAgentsRequest",
+        fields={
+            "agent_ids": serializers.ListField(child=serializers.CharField()),
+        },
+    ),
+    responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, UpdateAgentPerms])
 def update_agents(request):
@@ -511,6 +722,24 @@ def update_agents(request):
     return Response("ok")
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Ping an agent",
+    description="Pings the agent over NATS and reports whether it is online.",
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+    responses=inline_serializer(
+        name="AgentsPingResponse",
+        fields={
+            "name": serializers.CharField(),
+            "status": serializers.CharField(),
+        },
+    ),
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, AgentPerms])
 def ping(request, agent_id):
@@ -532,6 +761,31 @@ def ping(request, agent_id):
     return Response({"name": agent.hostname, "status": status})
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Get a Windows event log",
+    description="Retrieves entries from a Windows event log on the agent for the "
+    "given number of days back.",
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        ),
+        OpenApiParameter(
+            "logtype", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Event log name (e.g. Application, System, Security).",
+        ),
+        OpenApiParameter(
+            "days", OpenApiTypes.INT, OpenApiParameter.PATH,
+            description="Number of days back to retrieve.",
+        ),
+    ],
+    responses={
+        200: OpenApiResponse(
+            OpenApiTypes.OBJECT, description="Event log entries reported by the agent."
+        )
+    },
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, EvtLogPerms])
 def get_event_log(request, agent_id, logtype, days):
@@ -558,6 +812,30 @@ def get_event_log(request, agent_id, logtype, days):
     return Response(r)
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Run a raw command on an agent",
+    description="Executes a raw shell command on the agent and returns its output.",
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+    request=inline_serializer(
+        name="AgentsSendRawCmdRequest",
+        fields={
+            "cmd": serializers.CharField(),
+            "shell": serializers.CharField(help_text="Shell, or 'custom'."),
+            "custom_shell": serializers.CharField(required=False, allow_blank=True),
+            "timeout": serializers.IntegerField(),
+            "run_as_user": serializers.BooleanField(),
+        },
+    ),
+    responses={
+        200: OpenApiResponse(OpenApiTypes.STR, description="Command output.")
+    },
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, SendCMDPerms])
 def send_raw_cmd(request, agent_id):
@@ -602,10 +880,26 @@ def send_raw_cmd(request, agent_id):
     return Response(r)
 
 
+@extend_schema(
+    tags=["agents"],
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+)
 class Shutdown(APIView):
     permission_classes = [IsAuthenticated, RebootAgentPerms]
 
     # shutdown
+    @extend_schema(
+        summary="Shut down an agent",
+        request=None,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="'ok' on success.")
+        },
+    )
     def post(self, request, agent_id):
         agent = get_object_or_404(Agent, agent_id=agent_id)
         r = asyncio.run(agent.nats_cmd({"func": "shutdown"}, timeout=10))
@@ -615,10 +909,26 @@ class Shutdown(APIView):
         return Response("ok")
 
 
+@extend_schema(
+    tags=["agents"],
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+)
 class Reboot(APIView):
     permission_classes = [IsAuthenticated, RebootAgentPerms]
 
     # reboot now
+    @extend_schema(
+        summary="Reboot an agent now",
+        request=None,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="'ok' on success.")
+        },
+    )
     def post(self, request, agent_id):
         agent = get_object_or_404(Agent, agent_id=agent_id)
         r = asyncio.run(agent.nats_cmd({"func": "rebootnow"}, timeout=10))
@@ -628,6 +938,27 @@ class Reboot(APIView):
         return Response("ok")
 
     # reboot later
+    @extend_schema(
+        summary="Schedule a reboot (Windows only)",
+        description="Schedules a one-time reboot at the given local date/time. "
+        "Not implemented for POSIX agents.",
+        request=inline_serializer(
+            name="AgentsScheduleRebootRequest",
+            fields={
+                "datetime": serializers.CharField(
+                    help_text="Local datetime, format %Y-%m-%dT%H:%M."
+                ),
+            },
+        ),
+        responses=inline_serializer(
+            name="AgentsScheduleRebootResponse",
+            fields={
+                "time": serializers.CharField(),
+                "agent": serializers.CharField(),
+                "task_name": serializers.CharField(),
+            },
+        ),
+    )
     def patch(self, request, agent_id):
         agent = get_object_or_404(Agent, agent_id=agent_id)
         if agent.is_posix:
@@ -684,6 +1015,46 @@ class Reboot(APIView):
         )
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Generate an agent installer",
+    description="Generates an agent installer for the given client/site/platform. "
+    "Depending on `installMethod` this returns a Windows .exe download "
+    "('exe'), a JSON object with install command and URL ('manual'/'mac'/'bash'), "
+    "or a PowerShell installer file download ('powershell').",
+    request=inline_serializer(
+        name="AgentsInstallAgentRequest",
+        fields={
+            "installMethod": serializers.ChoiceField(
+                choices=["exe", "manual", "mac", "bash", "powershell"]
+            ),
+            "client": serializers.IntegerField(),
+            "site": serializers.IntegerField(),
+            "expires": serializers.CharField(help_text="Token expiry in hours."),
+            "agenttype": serializers.ChoiceField(choices=["server", "workstation"]),
+            "goarch": serializers.CharField(),
+            "plat": serializers.CharField(),
+            "api": serializers.CharField(),
+            "fileName": serializers.CharField(required=False),
+            "rdp": serializers.IntegerField(required=False),
+            "ping": serializers.IntegerField(required=False),
+            "power": serializers.IntegerField(required=False),
+        },
+    ),
+    responses={
+        200: OpenApiResponse(
+            inline_serializer(
+                name="AgentsInstallAgentResponse",
+                fields={
+                    "cmd": serializers.CharField(),
+                    "url": serializers.CharField(),
+                },
+            ),
+            description="For manual/mac/bash methods, returns install command and URL. "
+            "For 'exe' returns a binary download; for 'powershell' returns a .ps1 file.",
+        )
+    },
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, InstallAgentPerms])
 def install_agent(request):
@@ -844,6 +1215,24 @@ def install_agent(request):
             return response
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Recover an agent",
+    description="Attempts to recover the tactical agent or mesh agent on the machine.",
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+    request=inline_serializer(
+        name="AgentsRecoverRequest",
+        fields={
+            "mode": serializers.ChoiceField(choices=["tacagent", "mesh"]),
+        },
+    ),
+    responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, RecoverAgentPerms])
 def recover(request, agent_id: str) -> Response:
@@ -869,6 +1258,47 @@ def recover(request, agent_id: str) -> Response:
     return Response("Successfully completed recovery")
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Run a script on an agent",
+    description="Runs a script on the agent (or on the server). The `output` mode "
+    "controls behavior: 'wait' returns output synchronously, 'email' emails results, "
+    "'collector' saves to a custom field, 'note' saves to an agent note, otherwise "
+    "the script runs in the background.",
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+    request=inline_serializer(
+        name="AgentsRunScriptRequest",
+        fields={
+            "script": serializers.IntegerField(help_text="Script id."),
+            "output": serializers.CharField(
+                help_text="One of wait, email, collector, note, or other (background)."
+            ),
+            "args": serializers.ListField(child=serializers.CharField()),
+            "run_as_user": serializers.BooleanField(),
+            "env_vars": serializers.ListField(child=serializers.CharField()),
+            "timeout": serializers.IntegerField(),
+            "run_on_server": serializers.BooleanField(required=False),
+            "emailMode": serializers.CharField(required=False),
+            "emails": serializers.ListField(
+                child=serializers.CharField(), required=False
+            ),
+            "custom_field": serializers.IntegerField(required=False),
+            "save_all_output": serializers.BooleanField(required=False),
+        },
+    ),
+    responses={
+        200: OpenApiResponse(
+            OpenApiTypes.STR,
+            description="Script output (wait/collector/note/server) or a confirmation "
+            "message for background/email runs.",
+        )
+    },
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, RunScriptPerms])
 def run_script(request, agent_id):
@@ -1009,6 +1439,19 @@ def run_script(request, agent_id):
 class GetAddNotes(APIView):
     permission_classes = [IsAuthenticated, AgentNotesPerms]
 
+    @extend_schema(
+        tags=["agents"],
+        summary="List agent notes",
+        description="Lists notes for a specific agent (when agent_id is in the path) "
+        "or all notes the user can view.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH, required=False,
+                description="Agent identifier (agent_id). Omit for all notes.",
+            )
+        ],
+        responses=AgentNoteSerializer(many=True),
+    )
     def get(self, request, agent_id=None):
         if agent_id:
             agent = get_object_or_404(Agent, agent_id=agent_id)
@@ -1018,6 +1461,20 @@ class GetAddNotes(APIView):
 
         return Response(AgentNoteSerializer(notes, many=True).data)
 
+    @extend_schema(
+        tags=["agents"],
+        summary="Add an agent note",
+        request=inline_serializer(
+            name="AgentsAddNoteRequest",
+            fields={
+                "agent_id": serializers.CharField(),
+                "note": serializers.CharField(),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def post(self, request):
         agent = get_object_or_404(Agent, agent_id=request.data["agent_id"])
         if not _has_perm_on_agent(request.user, agent.agent_id):
@@ -1038,9 +1495,19 @@ class GetAddNotes(APIView):
         return Response("Note added!")
 
 
+@extend_schema(
+    tags=["agents"],
+    parameters=[
+        OpenApiParameter(
+            "pk", OpenApiTypes.INT, OpenApiParameter.PATH,
+            description="Note primary key.",
+        )
+    ],
+)
 class GetEditDeleteNote(APIView):
     permission_classes = [IsAuthenticated, AgentNotesPerms]
 
+    @extend_schema(summary="Get an agent note", responses=AgentNoteSerializer)
     def get(self, request, pk):
         note = get_object_or_404(Note, pk=pk)
 
@@ -1049,6 +1516,13 @@ class GetEditDeleteNote(APIView):
 
         return Response(AgentNoteSerializer(note).data)
 
+    @extend_schema(
+        summary="Edit an agent note",
+        request=AgentNoteSerializer,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def put(self, request, pk):
         note = get_object_or_404(Note, pk=pk)
 
@@ -1060,6 +1534,12 @@ class GetEditDeleteNote(APIView):
         serializer.save()
         return Response("Note edited!")
 
+    @extend_schema(
+        summary="Delete an agent note",
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def delete(self, request, pk):
         note = get_object_or_404(Note, pk=pk)
 
@@ -1070,6 +1550,50 @@ class GetEditDeleteNote(APIView):
         return Response("Note was deleted!")
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Run a bulk action",
+    description="Runs a bulk command, script or patch action across a target set of "
+    "agents (selected agents, a client, a site, or all). The `mode` field selects "
+    "the action type and the relevant fields apply per mode.",
+    request=inline_serializer(
+        name="AgentsBulkRequest",
+        fields={
+            "mode": serializers.ChoiceField(choices=["command", "script", "patch"]),
+            "target": serializers.ChoiceField(
+                choices=["agents", "client", "site", "all"]
+            ),
+            "agents": serializers.ListField(
+                child=serializers.CharField(), required=False
+            ),
+            "client": serializers.IntegerField(required=False),
+            "site": serializers.IntegerField(required=False),
+            "monType": serializers.CharField(
+                help_text="all, servers or workstations."
+            ),
+            "osType": serializers.CharField(help_text="all or a platform."),
+            "cmd": serializers.CharField(required=False),
+            "shell": serializers.CharField(required=False),
+            "custom_shell": serializers.CharField(required=False, allow_blank=True),
+            "timeout": serializers.IntegerField(required=False),
+            "run_as_user": serializers.BooleanField(required=False),
+            "script": serializers.IntegerField(required=False),
+            "args": serializers.ListField(
+                child=serializers.CharField(), required=False
+            ),
+            "env_vars": serializers.ListField(
+                child=serializers.CharField(), required=False
+            ),
+            "custom_field": serializers.IntegerField(required=False, allow_null=True),
+            "collector_all_output": serializers.BooleanField(required=False),
+            "save_to_agent_note": serializers.BooleanField(required=False),
+            "patchMode": serializers.ChoiceField(
+                choices=["install", "scan"], required=False
+            ),
+        },
+    ),
+    responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, RunBulkPerms])
 def bulk(request):
@@ -1184,6 +1708,21 @@ def bulk(request):
     return notify_error("Something went wrong")
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Toggle maintenance mode in bulk",
+    description="Enables or disables maintenance mode for all agents under a client "
+    "or site.",
+    request=inline_serializer(
+        name="AgentsMaintenanceRequest",
+        fields={
+            "type": serializers.ChoiceField(choices=["Client", "Site"]),
+            "id": serializers.IntegerField(),
+            "action": serializers.BooleanField(),
+        },
+    ),
+    responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, AgentPerms])
 def agent_maintenance(request):
@@ -1219,6 +1758,12 @@ def agent_maintenance(request):
     )
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Recover all overdue agents",
+    description="Queues a background task to recover all agents needing recovery.",
+    responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, RecoverAgentPerms])
 def bulk_agent_recovery(request):
@@ -1229,6 +1774,21 @@ def bulk_agent_recovery(request):
 class WMI(APIView):
     permission_classes = [IsAuthenticated, AgentPerms]
 
+    @extend_schema(
+        tags=["agents"],
+        summary="Refresh agent system (WMI) info",
+        description="Triggers the agent to re-collect and report system information.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+                description="Agent identifier (agent_id).",
+            )
+        ],
+        request=None,
+        responses={
+            200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")
+        },
+    )
     def post(self, request, agent_id):
         agent = get_object_or_404(Agent, agent_id=agent_id)
         r = asyncio.run(agent.nats_cmd({"func": "sysinfo"}, timeout=20))
@@ -1240,6 +1800,19 @@ class WMI(APIView):
 class AgentHistoryView(APIView):
     permission_classes = [IsAuthenticated, AgentHistoryPerms]
 
+    @extend_schema(
+        tags=["agents"],
+        summary="List agent history",
+        description="Lists history entries for a specific agent (when agent_id is in "
+        "the path) or all history the user can view.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH, required=False,
+                description="Agent identifier (agent_id). Omit for all history.",
+            )
+        ],
+        responses=AgentHistorySerializer(many=True),
+    )
     def get(self, request, agent_id=None):
         if agent_id:
             agent = get_object_or_404(Agent, agent_id=agent_id)
@@ -1271,6 +1844,44 @@ class ScriptRunHistory(APIView):
             )
             read_only_fields = fields
 
+    @extend_schema(
+        tags=["agents"],
+        summary="List script run history",
+        description="Returns history of script runs across agents, optionally filtered "
+        "by date range, script name, and limited in count.",
+        parameters=[
+            OpenApiParameter(
+                "start", OpenApiTypes.DATE, OpenApiParameter.QUERY, required=False,
+                description="Start of date range (with 'end').",
+            ),
+            OpenApiParameter(
+                "end", OpenApiTypes.DATE, OpenApiParameter.QUERY, required=False,
+                description="End of date range (with 'start').",
+            ),
+            OpenApiParameter(
+                "limit", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False,
+                description="Maximum number of records to return.",
+            ),
+            OpenApiParameter(
+                "scriptname", OpenApiTypes.STR, OpenApiParameter.QUERY, required=False,
+                description="Filter by exact script name.",
+            ),
+        ],
+        responses=inline_serializer(
+            name="AgentsScriptRunHistoryResponse",
+            many=True,
+            fields={
+                "id": serializers.IntegerField(),
+                "time": serializers.DateTimeField(),
+                "username": serializers.CharField(),
+                "script": serializers.IntegerField(),
+                "script_results": serializers.JSONField(),
+                "agent": serializers.IntegerField(),
+                "script_name": serializers.CharField(),
+                "agent_id": serializers.CharField(),
+            },
+        ),
+    )
     def get(self, request):
         date_range_filter = Q()
         script_name_filter = Q()
@@ -1345,6 +1956,19 @@ class ScriptRunHistory(APIView):
         return Response(ret)
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Send Wake-on-LAN",
+    description="Sends a Wake-on-LAN packet to the agent via MeshCentral.",
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+    request=None,
+    responses={200: OpenApiResponse(OpenApiTypes.STR, description="Confirmation message")},
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, AgentWOLPerms])
 def wol(request, agent_id):
@@ -1360,6 +1984,41 @@ def wol(request, agent_id):
     return Response(f"Wake-on-LAN sent to {agent.hostname}")
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Browse the registry",
+    description="Browses a registry path on the agent, returning subkeys and values "
+    "with pagination.",
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        ),
+        OpenApiParameter(
+            "path", OpenApiTypes.STR, OpenApiParameter.QUERY, required=False,
+            description="Registry path to browse. Defaults to 'Computer'.",
+        ),
+        OpenApiParameter(
+            "page", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False,
+            description="Page number (default 1).",
+        ),
+        OpenApiParameter(
+            "page_size", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False,
+            description="Page size (default 200).",
+        ),
+    ],
+    responses=inline_serializer(
+        name="AgentsBrowseRegistryResponse",
+        fields={
+            "path": serializers.CharField(),
+            "subkeys": serializers.ListField(child=serializers.CharField()),
+            "values": serializers.ListField(child=serializers.DictField()),
+            "has_more": serializers.BooleanField(),
+            "page": serializers.IntegerField(),
+            "page_size": serializers.IntegerField(),
+        },
+    ),
+)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def browse_registry(request, agent_id):
@@ -1395,6 +2054,27 @@ def browse_registry(request, agent_id):
     )
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Create a registry key",
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+    request=inline_serializer(
+        name="AgentsCreateRegistryKeyRequest",
+        fields={"path": serializers.CharField()},
+    ),
+    responses=inline_serializer(
+        name="AgentsCreateRegistryKeyResponse",
+        fields={
+            "status": serializers.CharField(),
+            "path": serializers.CharField(),
+        },
+    ),
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def create_registry_key(request, agent_id):
@@ -1415,6 +2095,27 @@ def create_registry_key(request, agent_id):
     return Response({"status": "success", "path": path})
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Delete a registry key",
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        ),
+        OpenApiParameter(
+            "path", OpenApiTypes.STR, OpenApiParameter.QUERY,
+            description="Registry key path to delete.",
+        ),
+    ],
+    responses=inline_serializer(
+        name="AgentsDeleteRegistryKeyResponse",
+        fields={
+            "status": serializers.CharField(),
+            "deleted_path": serializers.CharField(),
+        },
+    ),
+)
 @api_view(["DELETE"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def delete_registry_key(request, agent_id):
@@ -1435,6 +2136,31 @@ def delete_registry_key(request, agent_id):
     return Response({"status": "success", "deleted_path": path})
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Rename a registry key",
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+    request=inline_serializer(
+        name="AgentsRenameRegistryKeyRequest",
+        fields={
+            "old_path": serializers.CharField(),
+            "new_path": serializers.CharField(),
+        },
+    ),
+    responses=inline_serializer(
+        name="AgentsRenameRegistryKeyResponse",
+        fields={
+            "status": serializers.CharField(),
+            "old_path": serializers.CharField(),
+            "new_path": serializers.CharField(),
+        },
+    ),
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def rename_registry_key(request, agent_id):
@@ -1465,6 +2191,32 @@ def rename_registry_key(request, agent_id):
     )
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Create a registry value",
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+    request=inline_serializer(
+        name="AgentsCreateRegistryValueRequest",
+        fields={
+            "path": serializers.CharField(),
+            "name": serializers.CharField(),
+            "type": serializers.CharField(help_text="Registry value type."),
+            "data": serializers.CharField(allow_blank=True, allow_null=True),
+        },
+    ),
+    responses=inline_serializer(
+        name="AgentsCreateRegistryValueResponse",
+        fields={
+            "status": serializers.CharField(),
+            "data": serializers.DictField(),
+        },
+    ),
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def create_registry_value(request, agent_id):
@@ -1508,6 +2260,31 @@ def create_registry_value(request, agent_id):
     )
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Delete a registry value",
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        ),
+        OpenApiParameter(
+            "path", OpenApiTypes.STR, OpenApiParameter.QUERY,
+            description="Registry key path containing the value.",
+        ),
+        OpenApiParameter(
+            "name", OpenApiTypes.STR, OpenApiParameter.QUERY,
+            description="Value name to delete.",
+        ),
+    ],
+    responses=inline_serializer(
+        name="AgentsDeleteRegistryValueResponse",
+        fields={
+            "status": serializers.CharField(),
+            "name": serializers.CharField(),
+        },
+    ),
+)
 @api_view(["DELETE"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def delete_registry_value(request, agent_id):
@@ -1532,6 +2309,32 @@ def delete_registry_value(request, agent_id):
     return Response({"status": "success", "name": val_name})
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Rename a registry value",
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+    request=inline_serializer(
+        name="AgentsRenameRegistryValueRequest",
+        fields={
+            "path": serializers.CharField(),
+            "old_name": serializers.CharField(),
+            "new_name": serializers.CharField(),
+        },
+    ),
+    responses=inline_serializer(
+        name="AgentsRenameRegistryValueResponse",
+        fields={
+            "status": serializers.CharField(),
+            "old_name": serializers.CharField(),
+            "new_name": serializers.CharField(),
+        },
+    ),
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def rename_registry_value(request, agent_id):
@@ -1572,6 +2375,32 @@ def rename_registry_value(request, agent_id):
     )
 
 
+@extend_schema(
+    tags=["agents"],
+    summary="Modify a registry value",
+    parameters=[
+        OpenApiParameter(
+            "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+            description="Agent identifier (agent_id).",
+        )
+    ],
+    request=inline_serializer(
+        name="AgentsModifyRegistryValueRequest",
+        fields={
+            "path": serializers.CharField(),
+            "name": serializers.CharField(),
+            "type": serializers.CharField(help_text="Registry value type."),
+            "data": serializers.CharField(allow_blank=True, allow_null=True),
+        },
+    ),
+    responses=inline_serializer(
+        name="AgentsModifyRegistryValueResponse",
+        fields={
+            "status": serializers.CharField(),
+            "data": serializers.DictField(),
+        },
+    ),
+)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def modify_registry_value(request, agent_id):
@@ -1618,6 +2447,19 @@ def modify_registry_value(request, agent_id):
 class AgentTerminalDefaults(APIView):
     permission_classes = [IsAuthenticated, AgentTerminalPerms]
 
+    @extend_schema(
+        tags=["agents"],
+        summary="Get agent terminal defaults",
+        description="Returns the agent's effective default shell and terminal mode "
+        "settings.",
+        parameters=[
+            OpenApiParameter(
+                "agent_id", OpenApiTypes.STR, OpenApiParameter.PATH,
+                description="Agent identifier (agent_id).",
+            )
+        ],
+        responses=AgentTerminalDefaultsSerializer,
+    )
     def get(self, request, agent_id):
         agent = get_object_or_404(
             Agent.objects.filter_by_role(request.user).defer(*AGENT_DEFER),

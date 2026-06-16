@@ -1,4 +1,5 @@
 from django.conf import settings
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from tacticalrmm.constants import (
@@ -35,6 +36,7 @@ class HostedCoreMixin:
 class CoreSettingsSerializer(HostedCoreMixin, serializers.ModelSerializer):
     all_timezones = serializers.SerializerMethodField("all_time_zones")
 
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def all_time_zones(self, obj):
         return ALL_TIMEZONES
 
