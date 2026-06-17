@@ -7,8 +7,8 @@ temp="/tmp/tactical"
 
 args="$*"
 version="latest"
-branch="master"
-repo="amidaware"
+branch="testing"
+repo="RKBlack"
 
 branchRegex=" --branch ([^ ]+)"
 if [[ " ${args}" =~ ${branchRegex} ]]; then

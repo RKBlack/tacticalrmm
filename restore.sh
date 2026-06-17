@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 SCRIPT_VERSION="66"
-SCRIPT_URL='https://raw.githubusercontent.com/amidaware/tacticalrmm/master/restore.sh'
+SCRIPT_URL='https://raw.githubusercontent.com/RKBlack/tacticalrmm/testing/restore.sh'
 
 sudo apt update
 sudo apt install -y curl wget jq dirmngr gnupg lsb-release ca-certificates
@@ -325,11 +325,11 @@ sudo mkdir /rmm
 sudo chown ${USER}:${USER} /rmm
 sudo mkdir -p /var/log/celery
 sudo chown ${USER}:${USER} /var/log/celery
-git clone https://github.com/amidaware/tacticalrmm.git /rmm/
+git clone https://github.com/RKBlack/tacticalrmm.git /rmm/
 cd /rmm
 git config user.email "admin@example.com"
 git config user.name "Bob"
-git checkout master
+git checkout testing
 
 sudo mkdir -p ${SCRIPTS_DIR}
 sudo chown ${USER}:${USER} ${SCRIPTS_DIR}

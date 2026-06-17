@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 SCRIPT_VERSION="159"
-SCRIPT_URL='https://raw.githubusercontent.com/amidaware/tacticalrmm/master/update.sh'
-LATEST_SETTINGS_URL='https://raw.githubusercontent.com/amidaware/tacticalrmm/master/api/tacticalrmm/tacticalrmm/settings.py'
+SCRIPT_URL='https://raw.githubusercontent.com/RKBlack/tacticalrmm/testing/update.sh'
+LATEST_SETTINGS_URL='https://raw.githubusercontent.com/RKBlack/tacticalrmm/testing/api/tacticalrmm/tacticalrmm/settings.py'
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -429,7 +429,7 @@ cd /rmm
 git config user.email "admin@example.com"
 git config user.name "Bob"
 git fetch
-git checkout master
+git checkout testing
 git reset --hard FETCH_HEAD
 git clean -df
 git pull

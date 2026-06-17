@@ -150,8 +150,8 @@ FIRST_ARG="$1"
 
 # defaults
 DOCKER_REPO="tacticalrmm/"
-REPO="amidaware"
-BRANCH="master"
+REPO="RKBlack"
+BRANCH="testing"
 VERSION="latest"
 
 # file locations
