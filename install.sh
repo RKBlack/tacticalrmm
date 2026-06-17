@@ -66,24 +66,8 @@ codename=$(lsb_release -sc)
 relno=$(lsb_release -sr | cut -d. -f1)
 fullrelno=$(lsb_release -sr)
 
-not_supported() {
-  echo -ne "${RED}ERROR: Only Debian 11, Debian 12 and Ubuntu 22.04 are supported.${NC}\n"
-}
-
-if [[ "$osname" == "debian" ]]; then
-  if [[ "$relno" -ne 11 && "$relno" -ne 12 ]]; then
-    not_supported
-    exit 1
-  fi
-elif [[ "$osname" == "ubuntu" ]]; then
-  if [[ "$fullrelno" != "22.04" ]]; then
-    not_supported
-    exit 1
-  fi
-else
-  not_supported
-  exit 1
-fi
+# OS version enforcement disabled for testing — any OS/version is allowed.
+echo -ne "${YELLOW}WARNING: OS version checks are disabled. Detected ${fullrel} (${osname} ${fullrelno}). This is unsupported and intended for testing only.${NC}\n"
 
 if dpkg -l | grep -qi turnkey; then
   echo -ne "${RED}Turnkey linux is not supported. Please use the official debian/ubuntu ISO.${NC}\n"
